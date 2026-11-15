@@ -1,0 +1,279 @@
+syntax = "proto3";
+
+package inbox.v1;
+
+// Shared trusted workspace; there are no authentication or ownership fields.
+// IDs and page tokens are opaque strings. All timestamps are UTC RFC3339 strings.
+// Invalid arguments use INVALID_ARGUMENT; missing resources use NOT_FOUND.
+service MailService {
+  rpc CreateDomain(CreateDomainRequest) returns (CreateDomainResponse);
+  rpc ListDomains(ListDomainsRequest) returns (ListDomainsResponse);
+  rpc SetDomainPolicy(SetDomainPolicyRequest) returns (SetDomainPolicyResponse);
+  rpc CreateMailbox(CreateMailboxRequest) returns (CreateMailboxResponse);
+  rpc ListMailboxes(ListMailboxesRequest) returns (ListMailboxesResponse);
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+  rpc GetMessage(GetMessageRequest) returns (GetMessageResponse);
+  rpc GetRawMessage(GetRawMessageRequest) returns (GetRawMessageResponse);
+  rpc SubmitMessage(SubmitMessageRequest) returns (SubmitMessageResponse);
+  rpc GetSubmission(GetSubmissionRequest) returns (GetSubmissionResponse);
+  rpc SetReadState(SetReadStateRequest) returns (SetReadStateResponse);
+  // Shared invalidation events retain their approved wire name.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc WatchChanges(WatchChangesRequest) returns (stream ChangeEvent);
+}
+
+enum Folder {
+  FOLDER_UNSPECIFIED = 0;
+  FOLDER_INBOX = 1;
+  FOLDER_SENT = 2;
+}
+
+enum SubmissionStatus {
+  SUBMISSION_STATUS_UNSPECIFIED = 0;
+  SUBMISSION_STATUS_PENDING = 1;
+  SUBMISSION_STATUS_SUCCEEDED = 2;
+  SUBMISSION_STATUS_PARTIALLY_FAILED = 3;
+  SUBMISSION_STATUS_FAILED = 4;
+}
+
+enum RecipientStatus {
+  RECIPIENT_STATUS_UNSPECIFIED = 0;
+  RECIPIENT_STATUS_PENDING = 1;
+  RECIPIENT_STATUS_DELIVERED = 2;
+  RECIPIENT_STATUS_FAILED = 3;
+}
+
+message Mailbox {
+  string id = 1;
+  string local_part = 2;
+  string name = 3;
+  string address = 4;
+  string created_at = 5;
+  string domain_id = 6;
+  string domain = 7;
+}
+
+message Domain {
+  string id = 1;
+  string name = 2;
+  bool receive_enabled = 3;
+  bool send_enabled = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message CreateDomainRequest {
+  string name = 1;
+  bool receive_enabled = 2;
+  bool send_enabled = 3;
+  string request_id = 4;
+}
+message CreateDomainResponse {
+  Domain domain = 1;
+}
+message ListDomainsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+message ListDomainsResponse {
+  repeated Domain domains = 1;
+  string next_page_token = 2;
+}
+message SetDomainPolicyRequest {
+  string domain_id = 1;
+  bool receive_enabled = 2;
+  bool send_enabled = 3;
+  string request_id = 4;
+}
+message SetDomainPolicyResponse {
+  Domain domain = 1;
+}
+
+// Message identity and content are shared; entry identity and read state are not.
+// A message can have separate inbox/sent entries in the same mailbox.
+message MessageEntry {
+  string id = 1;
+  string mailbox_id = 2;
+  string message_id = 3;
+  Folder folder = 4;
+  bool is_read = 5;
+  string from_address = 6;
+  repeated string to = 7;
+  repeated string cc = 8;
+  string subject = 9;
+  string preview = 10;
+  string created_at = 11;
+  // RFC3339 message Date, or empty when absent or invalid.
+  string sent_at = 12;
+  uint64 raw_size_bytes = 13;
+}
+
+message Message {
+  MessageEntry entry = 1;
+  // Decoded plain text, or empty if no plain-text part exists. Never HTML.
+  string text_body = 2;
+  // RFC message identifiers, not opaque application message IDs; may be empty.
+  string internet_message_id = 3;
+  string in_reply_to = 4;
+  repeated string references = 5;
+  // Preferred reply destination: first Reply-To address, otherwise From.
+  string reply_to_address = 6;
+}
+
+message RecipientDelivery {
+  string address = 1;
+  RecipientStatus status = 2;
+  // Set after local delivery; empty while pending or on failure.
+  string mailbox_id = 3;
+  string entry_id = 4;
+  // Stable machine-readable code and human-readable detail; empty unless failed.
+  string error_code = 5;
+  string error_message = 6;
+  string updated_at = 7;
+}
+
+// Durable delivery state. Recipients are deduplicated across To and Cc.
+// PENDING means at least one recipient is pending. Terminal status is SUCCEEDED
+// when all delivered, FAILED when none delivered, otherwise PARTIALLY_FAILED.
+message Submission {
+  string id = 1;
+  string message_id = 2;
+  string from_mailbox_id = 3;
+  SubmissionStatus status = 4;
+  repeated RecipientDelivery recipients = 5;
+  string created_at = 6;
+  string updated_at = 7;
+}
+
+message CreateMailboxRequest {
+  // Case-insensitive local part, unique within the selected domain.
+  // The server validates and normalizes this value; duplicates use ALREADY_EXISTS.
+  string local_part = 1;
+  string name = 2;
+  string request_id = 3;
+  // Empty selects the persisted bootstrap default.
+  string domain_id = 4;
+}
+
+message CreateMailboxResponse {
+  Mailbox mailbox = 1;
+}
+
+message ListMailboxesRequest {
+  // Zero defaults to 50; valid explicit values are 1..100.
+  int32 page_size = 1;
+  // Empty starts a traversal. Tokens are bound to the original query.
+  string page_token = 2;
+}
+
+message ListMailboxesResponse {
+  // Ordered by created_at descending, with id as a stable descending tiebreaker.
+  repeated Mailbox mailboxes = 1;
+  string next_page_token = 2;
+}
+
+message ListMessagesRequest {
+  string mailbox_id = 1;
+  // Required: INBOX or SENT; UNSPECIFIED is invalid.
+  Folder folder = 2;
+  // Zero defaults to 50; valid explicit values are 1..100.
+  int32 page_size = 3;
+  // Empty starts a traversal; reuse only with the same mailbox and folder.
+  string page_token = 4;
+}
+
+message ListMessagesResponse {
+  // Ordered by entry created_at descending, then entry id descending.
+  repeated MessageEntry entries = 1;
+  // Empty indicates the end of the traversal.
+  string next_page_token = 2;
+}
+
+message GetMessageRequest {
+  string mailbox_id = 1;
+  // Must identify an entry in mailbox_id. Fetching does not mark it read.
+  string entry_id = 2;
+}
+
+message GetMessageResponse {
+  Message message = 1;
+}
+
+message GetRawMessageRequest {
+  string mailbox_id = 1;
+  string entry_id = 2;
+}
+
+message GetRawMessageResponse {
+  // Original RFC 5322 MIME bytes, capped at 25 MiB (26,214,400 bytes).
+  // Transports must allow protobuf framing above this raw-size limit.
+  bytes raw_message = 1;
+}
+
+message SubmitMessageRequest {
+  string from_mailbox_id = 1;
+  // Bare email addresses; at least one To recipient is required.
+  // Delivery is local only. Non-local or unknown addresses reject the entire
+  // submission with INVALID_ARGUMENT; this service never relays externally.
+  // Disabled sender-send or recipient-receive policy uses FAILED_PRECONDITION.
+  repeated string to = 2;
+  repeated string cc = 3;
+  string subject = 4;
+  string text_body = 5;
+  // Both fields must be present together or absent together. The source entry
+  // supplies RFC reply headers; To/Cc remain explicitly supplied by the caller.
+  optional string reply_to_entry_id = 6;
+  optional string source_mailbox_id = 7;
+  // Required, scoped to from_mailbox_id. An identical retry returns the same
+  // durable submission; reuse for a different payload returns ALREADY_EXISTS.
+  string idempotency_key = 8;
+  // The generated raw MIME must not exceed 25 MiB; otherwise RESOURCE_EXHAUSTED.
+}
+
+message SubmitMessageResponse {
+  // Persisted before success is returned, with message ID and initial status.
+  Submission submission = 1;
+}
+
+message GetSubmissionRequest {
+  string submission_id = 1;
+}
+
+message GetSubmissionResponse {
+  Submission submission = 1;
+}
+
+message SetReadStateRequest {
+  string mailbox_id = 1;
+  string entry_id = 2;
+  // Explicit desired state; applying the same state repeatedly is idempotent.
+  bool is_read = 3;
+  string request_id = 4;
+}
+
+message SetReadStateResponse {
+  MessageEntry entry = 1;
+}
+
+message WatchChangesRequest {
+  string resume_token = 1;
+}
+
+enum ChangeKind {
+  CHANGE_KIND_UNSPECIFIED = 0;
+  CHANGE_KIND_RESET = 1;
+  CHANGE_KIND_MAILBOX = 2;
+  CHANGE_KIND_MESSAGE = 3;
+  CHANGE_KIND_SUBMISSION = 4;
+  CHANGE_KIND_HEARTBEAT = 5;
+  CHANGE_KIND_DOMAIN = 6;
+}
+
+message ChangeEvent {
+  string resume_token = 1;
+  ChangeKind kind = 2;
+  string mailbox_id = 3;
+  string entry_id = 4;
+  string submission_id = 5;
+  string domain_id = 6;
+}

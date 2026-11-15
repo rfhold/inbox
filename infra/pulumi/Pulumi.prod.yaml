@@ -1,0 +1,18 @@
+config:
+  kubernetes:context: pantheon
+  inbox:namespace: inbox
+  inbox:hostname: inbox.holdenitdown.net
+  inbox:displayName: Inbox
+  inbox:slug: inbox
+  inbox:s3Endpoint: https://s3.pantheon.holdenitdown.net
+  inbox:backupEndpoint: https://s3.pantheon.holdenitdown.net
+  inbox:storageClass: shared-fs
+  inbox:bucketStorageClass: default-bucket
+  inbox:backupStorageClass: default-bucket
+  inbox:backupRetention: 30d
+  inbox:databaseStorageSize: 20Gi
+  inbox:protectData: "true"
+  inbox:natsNamespace: INBOX_PROD
+  inbox:oauthWrappingKeyVersions: [v1]
+  inbox:oauthActiveWrappingKeyVersion: v1
+encryptionsalt: v1:GCVZewaS1vE=:v1:Klw1t4rDeFyQd0BW:HY3YmZ9/ZgDjTKxzFvBztnrmtDgsWw==

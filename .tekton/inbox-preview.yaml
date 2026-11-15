@@ -1,0 +1,209 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: inbox-preview
+  annotations:
+    pipelinesascode.tekton.dev/task: "[https://git.holdenitdown.net/rfhold/homelab/raw/commit/db8891ad3b9467db8ff15d80bb931e01c2af2e0d/src/components/tekton-tasks/service-build-v1.yaml, https://git.holdenitdown.net/rfhold/homelab/raw/commit/db8891ad3b9467db8ff15d80bb931e01c2af2e0d/src/components/tekton-tasks/service-manifest-v1.yaml, https://git.holdenitdown.net/rfhold/homelab/raw/commit/db8891ad3b9467db8ff15d80bb931e01c2af2e0d/src/components/tekton-tasks/service-pulumi-up-v1.yaml]"
+    pipelinesascode.tekton.dev/on-event: "[push, incoming]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+    pipelinesascode.tekton.dev/max-keep-runs: "2"
+spec:
+  taskRunSpecs:
+    - pipelineTaskName: deploy-preview
+      podTemplate:
+        nodeSelector:
+          kubernetes.io/arch: amd64
+  timeouts:
+    pipeline: 2h0m0s
+  params:
+    - name: repo-url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: base-image
+      value: "{{ CONTAINER_REGISTRY }}/{{ repo_owner }}/inbox"
+  pipelineSpec:
+    params:
+      - name: repo-url
+        type: string
+      - name: revision
+        type: string
+      - name: base-image
+        type: string
+    workspaces:
+      - name: source
+      - name: git-credentials
+    tasks:
+      - name: fetch-repository
+        retries: 1
+        taskSpec:
+          params:
+            - name: repo-url
+              type: string
+            - name: revision
+              type: string
+          workspaces:
+            - name: output
+          volumes:
+            - name: git-auth
+              secret:
+                secretName: "{{ git_auth_secret }}"
+          steps:
+            - name: clone
+              image: docker.io/alpine/git:2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+              workingDir: $(workspaces.output.path)
+              volumeMounts:
+                - name: git-auth
+                  mountPath: /etc/git-auth
+                  readOnly: true
+              script: |
+                #!/bin/sh
+                set -eu
+                cp /etc/git-auth/.gitconfig /root/.gitconfig
+                cp /etc/git-auth/.git-credentials /root/.git-credentials
+                git clone "$(params.repo-url)" .
+                git checkout --detach "$(params.revision)"
+                test "`git rev-parse HEAD`" = "$(params.revision)"
+        params:
+          - name: repo-url
+            value: $(params.repo-url)
+          - name: revision
+            value: $(params.revision)
+        workspaces:
+          - name: output
+            workspace: source
+
+      - name: scan-private-material
+        runAfter: [fetch-repository]
+        taskSpec:
+          workspaces:
+            - name: source
+          steps:
+            - name: scan
+              image: docker.io/alpine/git:2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+              workingDir: $(workspaces.source.path)
+              script: |
+                #!/bin/sh
+                set -eu
+                status=0
+                git grep -q -E 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}' -- infra/pulumi Dockerfile .tekton || status=$?
+                case "$status" in
+                  0) echo "private credential material is tracked in deployment inputs" >&2; exit 1 ;;
+                  1) ;;
+                  *) echo "private credential scan failed" >&2; exit 1 ;;
+                esac
+        workspaces:
+          - name: source
+            workspace: source
+
+      - name: build-server-amd64
+        runAfter:
+          - scan-private-material
+        retries: 1
+        taskRef:
+          name: service-build-v1
+        params:
+          - name: repository
+            value: $(params.base-image)
+          - name: revision
+            value: $(params.revision)
+          - name: arch
+            value: amd64
+          - name: builder-address
+            value: tcp://{{ BUILDKIT_AMD64_ADDR }}
+          - name: context
+            value: .
+          - name: dockerfile
+            value: Dockerfile
+          - name: target
+            value: runtime
+          - name: revision-arg
+            value: REVISION
+          - name: expected-user
+            value: 10001:10001
+        workspaces:
+          - name: source
+            workspace: source
+          - name: git-credentials
+            workspace: git-credentials
+      - name: build-server-arm64
+        runAfter:
+          - scan-private-material
+        retries: 1
+        taskRef:
+          name: service-build-v1
+        params:
+          - name: repository
+            value: $(params.base-image)
+          - name: revision
+            value: $(params.revision)
+          - name: arch
+            value: arm64
+          - name: builder-address
+            value: tcp://{{ BUILDKIT_ARM64_ADDR }}
+          - name: context
+            value: .
+          - name: dockerfile
+            value: Dockerfile
+          - name: target
+            value: runtime
+          - name: revision-arg
+            value: REVISION
+          - name: expected-user
+            value: 10001:10001
+        workspaces:
+          - name: source
+            workspace: source
+          - name: git-credentials
+            workspace: git-credentials
+      - name: manifest-server
+        runAfter:
+          - build-server-amd64
+          - build-server-arm64
+        retries: 1
+        taskRef:
+          name: service-manifest-v1
+        params:
+          - name: repository
+            value: $(params.base-image)
+          - name: revision
+            value: $(params.revision)
+          - name: expected-user
+            value: 10001:10001
+          - name: sources
+            value: '[{"arch":"amd64","image":"$(tasks.build-server-amd64.results.image)"},{"arch":"arm64","image":"$(tasks.build-server-arm64.results.image)"}]'
+      - name: deploy-preview
+        runAfter:
+          - manifest-server
+        retries: 1
+        taskRef:
+          name: service-pulumi-up-v1
+        params:
+          - name: source-subdir
+            value: infra/pulumi
+          - name: stack
+            value: preview
+          - name: image-config
+            value: '{"image":"$(tasks.manifest-server.results.image)"}'
+          - name: authentik-enabled
+            value: 'true'
+          - name: grafana-enabled
+            value: 'false'
+          - name: openbao-enabled
+            value: 'false'
+        workspaces:
+          - name: source
+            workspace: source
+
+  workspaces:
+    - name: git-credentials
+      secret:
+        secretName: "{{ git_auth_secret }}"
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteMany]
+          storageClassName: shared-fs
+          resources:
+            requests:
+              storage: 20Gi

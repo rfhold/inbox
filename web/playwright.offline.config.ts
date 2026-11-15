@@ -1,0 +1,2 @@
+import { defineConfig } from '@playwright/test';
+export default defineConfig({testDir: './e2e', outputDir: 'test-results/offline', testMatch: ['offline.spec.ts', 'visual.spec.ts', 'changes.spec.ts', 'auth.spec.ts'], timeout: 60000, expect: {timeout: 15000}, use: {baseURL: 'http://localhost:4173'}, webServer: {command: 'pnpm preview --port 4173', url: 'http://localhost:4173', reuseExistingServer: false}, workers: 1});

@@ -1,0 +1,7 @@
+CREATE TABLE mailboxes (id uuid PRIMARY KEY, local_part text NOT NULL UNIQUE, name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE messages (id uuid PRIMARY KEY, object_key text NOT NULL UNIQUE, content jsonb NOT NULL, raw_size bigint NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE mailbox_entries (id uuid PRIMARY KEY, mailbox_id uuid NOT NULL REFERENCES mailboxes, message_id uuid NOT NULL REFERENCES messages, folder int NOT NULL CHECK(folder IN (1,2)), is_read bool NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(mailbox_id,message_id,folder));
+CREATE INDEX entries_pagination ON mailbox_entries(mailbox_id,folder,created_at DESC,id DESC);
+CREATE TABLE submissions (id uuid PRIMARY KEY, message_id uuid NOT NULL REFERENCES messages, from_mailbox_id uuid REFERENCES mailboxes, idempotency_key text, payload_hash text, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(from_mailbox_id,idempotency_key));
+CREATE TABLE deliveries (id uuid PRIMARY KEY, submission_id uuid NOT NULL REFERENCES submissions, mailbox_id uuid NOT NULL REFERENCES mailboxes, address text NOT NULL, entry_id uuid, status int NOT NULL DEFAULT 1, attempts int NOT NULL DEFAULT 0, lease_until timestamptz, updated_at timestamptz NOT NULL DEFAULT now(), traceparent text NOT NULL DEFAULT '', UNIQUE(submission_id,mailbox_id));
+CREATE INDEX delivery_work ON deliveries(status,lease_until);

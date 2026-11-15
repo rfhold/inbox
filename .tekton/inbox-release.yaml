@@ -1,0 +1,216 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: inbox-release
+  annotations:
+    pipelinesascode.tekton.dev/task: "[https://git.holdenitdown.net/rfhold/homelab/raw/commit/db8891ad3b9467db8ff15d80bb931e01c2af2e0d/src/components/tekton-tasks/service-promote-v1.yaml, https://git.holdenitdown.net/rfhold/homelab/raw/commit/db8891ad3b9467db8ff15d80bb931e01c2af2e0d/src/components/tekton-tasks/service-pulumi-up-v1.yaml]"
+    pipelinesascode.tekton.dev/on-cel-expression: 'event == "push" && target_branch.matches("^refs/tags/v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")'
+    pipelinesascode.tekton.dev/max-keep-runs: "2"
+spec:
+  taskRunSpecs:
+    - pipelineTaskName: deploy-production
+      podTemplate:
+        nodeSelector:
+          kubernetes.io/arch: amd64
+  timeouts:
+    pipeline: 2h0m0s
+  params:
+    - name: repo-url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: source-branch
+      value: "{{ source_branch }}"
+    - name: base-image
+      value: "{{ CONTAINER_REGISTRY }}/{{ repo_owner }}/inbox"
+  pipelineSpec:
+    params:
+      - name: repo-url
+        type: string
+      - name: revision
+        type: string
+      - name: source-branch
+        type: string
+      - name: base-image
+        type: string
+    workspaces:
+      - name: source
+    tasks:
+      - name: fetch-repository
+        retries: 1
+        taskSpec:
+          params:
+            - name: repo-url
+              type: string
+            - name: revision
+              type: string
+          workspaces:
+            - name: output
+          volumes:
+            - name: git-auth
+              secret:
+                secretName: "{{ git_auth_secret }}"
+          steps:
+            - name: clone
+              image: docker.io/alpine/git:2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+              workingDir: $(workspaces.output.path)
+              volumeMounts:
+                - name: git-auth
+                  mountPath: /etc/git-auth
+                  readOnly: true
+              script: |
+                #!/bin/sh
+                set -eu
+                cp /etc/git-auth/.gitconfig /root/.gitconfig
+                cp /etc/git-auth/.git-credentials /root/.git-credentials
+                git clone "$(params.repo-url)" .
+                git checkout --detach "$(params.revision)"
+                test "`git rev-parse HEAD`" = "$(params.revision)"
+        params:
+          - name: repo-url
+            value: $(params.repo-url)
+          - name: revision
+            value: $(params.revision)
+        workspaces:
+          - name: output
+            workspace: source
+
+      - name: validate-release
+        runAfter: [fetch-repository]
+        taskSpec:
+          params:
+            - name: revision
+              type: string
+            - name: source-branch
+              type: string
+          results:
+            - name: tag
+              type: string
+          workspaces:
+            - name: source
+          volumes:
+            - name: trusted-signers
+              secret:
+                secretName: release-trusted-signers
+          steps:
+            - name: policy
+              image: docker.io/alpine/git:2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+              workingDir: $(workspaces.source.path)
+              env:
+                - name: SOURCE_BRANCH
+                  value: $(params.source-branch)
+              volumeMounts:
+                - name: trusted-signers
+                  mountPath: /etc/release-signers
+                  readOnly: true
+              script: |
+                #!/bin/sh
+                set -eu
+                case "$SOURCE_BRANCH" in refs/tags/v*) tag="${SOURCE_BRANCH#refs/tags/}" ;; *) exit 1 ;; esac
+                printf '%s\n' "$tag" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+                printf '%s\n' "$(params.revision)" | grep -Eq '^[0-9a-f]{40}$'
+                export GNUPGHOME=/tmp/release-gnupg
+                install -d -m 700 "$GNUPGHOME"
+                gpg --batch --no-autostart --import /etc/release-signers/signing-key.asc
+                test "`git cat-file -t "refs/tags/$tag"`" = tag
+                test "`git rev-parse "refs/tags/$tag^{commit}"`" = "$(params.revision)"
+                git merge-base --is-ancestor "$(params.revision)" refs/remotes/origin/main
+                git verify-tag "$tag"
+                printf '%s' "$tag" > "$(results.tag.path)"
+            - name: version-consistency
+              image: cr.holdenitdown.net/rfhold/general-ci:latest
+              imagePullPolicy: Always
+              workingDir: $(workspaces.source.path)
+              env:
+                - name: SOURCE_BRANCH
+                  value: $(params.source-branch)
+              script: |
+                #!/usr/bin/env bun
+                import { readFileSync } from 'node:fs';
+                const version = process.env.SOURCE_BRANCH?.replace(/^refs\/tags\/v/, '');
+                const workspace = Bun.TOML.parse(readFileSync('Cargo.toml', 'utf8'));
+                const server = Bun.TOML.parse(readFileSync('crates/inbox-server/Cargo.toml', 'utf8'));
+                const rustVersion = server.package?.version?.workspace === true
+                  ? workspace.workspace?.package?.version : server.package?.version;
+                const web = JSON.parse(readFileSync('web/package.json', 'utf8'));
+                if (rustVersion !== version || web.version !== version) {
+                  throw new Error('release tag, inbox-server and inbox-web versions must match');
+                }
+        params:
+          - name: revision
+            value: $(params.revision)
+          - name: source-branch
+            value: $(params.source-branch)
+        workspaces:
+          - name: source
+            workspace: source
+
+      - name: scan-private-material
+        runAfter: [fetch-repository]
+        taskSpec:
+          workspaces:
+            - name: source
+          steps:
+            - name: scan
+              image: docker.io/alpine/git:2.49.1@sha256:c0280cf9572316299b08544065d3bf35db65043d5e3963982ec50647d2746e26
+              workingDir: $(workspaces.source.path)
+              script: |
+                #!/bin/sh
+                set -eu
+                status=0
+                git grep -q -E 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}' -- infra/pulumi Dockerfile .tekton || status=$?
+                case "$status" in
+                  0) echo "private credential material is tracked in deployment inputs" >&2; exit 1 ;;
+                  1) ;;
+                  *) echo "private credential scan failed" >&2; exit 1 ;;
+                esac
+        workspaces:
+          - name: source
+            workspace: source
+
+      - name: promote-release
+        runAfter:
+          - validate-release
+          - scan-private-material
+        retries: 1
+        taskRef:
+          name: service-promote-v1
+        params:
+          - name: revision
+            value: $(params.revision)
+          - name: version
+            value: $(tasks.validate-release.results.tag)
+          - name: images
+            value: '[{"key":"image","repository":"$(params.base-image)","platforms":["amd64","arm64"],"user":"10001:10001"}]'
+      - name: deploy-production
+        runAfter:
+          - promote-release
+        retries: 1
+        taskRef:
+          name: service-pulumi-up-v1
+        params:
+          - name: source-subdir
+            value: infra/pulumi
+          - name: stack
+            value: prod
+          - name: image-config
+            value: $(tasks.promote-release.results.images)
+          - name: authentik-enabled
+            value: 'true'
+          - name: grafana-enabled
+            value: 'false'
+          - name: openbao-enabled
+            value: 'false'
+        workspaces:
+          - name: source
+            workspace: source
+
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteMany]
+          storageClassName: shared-fs
+          resources:
+            requests:
+              storage: 20Gi

@@ -1,0 +1,6 @@
+name: inbox
+runtime:
+  name: nodejs
+  options:
+    packagemanager: bun
+description: Authenticated Inbox preview and production source declarations

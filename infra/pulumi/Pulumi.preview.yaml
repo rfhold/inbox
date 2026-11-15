@@ -1,0 +1,18 @@
+config:
+  kubernetes:context: pantheon
+  inbox:namespace: inbox-preview
+  inbox:hostname: preview-inbox.holdenitdown.net
+  inbox:displayName: Inbox Preview
+  inbox:slug: inbox-preview
+  inbox:s3Endpoint: https://s3.pantheon.holdenitdown.net
+  inbox:backupEndpoint: https://s3.pantheon.holdenitdown.net
+  inbox:storageClass: shared-fs
+  inbox:bucketStorageClass: default-bucket
+  inbox:backupStorageClass: default-bucket
+  inbox:backupRetention: 14d
+  inbox:databaseStorageSize: 10Gi
+  inbox:protectData: "false"
+  inbox:natsNamespace: INBOX_PREVIEW
+  inbox:oauthWrappingKeyVersions: [v1]
+  inbox:oauthActiveWrappingKeyVersion: v1
+encryptionsalt: v1:GNgDlKHIiL8=:v1:I2jb233AUwAIPVWt:ozI45LHuguG7cJbZH4ilemPzEuo/pg==

@@ -1,0 +1,107 @@
+name: inbox
+
+services:
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:${INBOX_HTTP_PORT:-8080}:8080"
+      - "127.0.0.1:${INBOX_SMTP_PORT:-2525}:2525"
+    environment:
+      INBOX_AUTH_MODE: disabled
+      INBOX_HTTP_ADDR: 0.0.0.0:8080
+      INBOX_SMTP_ADDR: 0.0.0.0:2525
+      DATABASE_URL: postgres://inbox:${POSTGRES_PASSWORD:?Run python3 scripts/setup.py}@postgres:5432/inbox
+      INBOX_DOMAIN: ${INBOX_DOMAIN:-inbox.test}
+      INBOX_S3_ENDPOINT: http://garage:3900
+      INBOX_S3_REGION: garage
+      INBOX_S3_BUCKET: ${INBOX_S3_BUCKET:-inbox}
+      INBOX_NATS_URL: nats://nats:4222
+      INBOX_NATS_NAMESPACE: INBOX
+      INBOX_NATS_REPLICAS: "1"
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Run python3 scripts/setup.py}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Run python3 scripts/setup.py}
+      INBOX_WEB_DIR: /app/web
+      INBOX_ENVIRONMENT: ${INBOX_ENVIRONMENT:-compose}
+      INBOX_FARO_URL: ${INBOX_FARO_URL:-https://faro.holdenitdown.net/collect}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-https://telemetry.holdenitdown.net:4318}
+      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+
+  postgres:
+    image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: inbox
+      POSTGRES_DB: inbox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/setup.py}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U inbox -d inbox"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  garage:
+    image: dxflrs/garage:v2.5.0@sha256:677e5b758e4425a325b811c425c026bf35a4bf42f7ddbaa773de3f4fd779a5a5
+    command: [/garage, server, --single-node, --default-bucket]
+    restart: unless-stopped
+    environment:
+      GARAGE_DEFAULT_ACCESS_KEY: ${AWS_ACCESS_KEY_ID:?Run python3 scripts/setup.py}
+      GARAGE_DEFAULT_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:?Run python3 scripts/setup.py}
+      GARAGE_DEFAULT_BUCKET: ${INBOX_S3_BUCKET:-inbox}
+    volumes:
+      - ./docker/garage.toml:/etc/garage.toml:ro
+      - garage-metadata:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    secrets: [garage_rpc_secret]
+    healthcheck:
+      test: [CMD, /garage, bucket, info, "${INBOX_S3_BUCKET:-inbox}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  nats:
+    image: nats:2.15.3-alpine3.22@sha256:558394a23dd3c36f2d3a64b51865fd09908010e80a542cea5e75c2af543ed62a
+    command: [nats-server, --config, /etc/nats/nats.conf]
+    user: "65534:65534"
+    restart: unless-stopped
+    volumes:
+      - ./docker/nats.conf:/etc/nats/nats.conf:ro
+      - nats-data:/var/tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+secrets:
+  garage_rpc_secret:
+    file: ./.local/garage-rpc-secret
+
+volumes:
+  postgres-data:
+  garage-metadata:
+  garage-data:
+  nats-data:
