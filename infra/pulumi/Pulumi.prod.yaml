@@ -14,6 +14,11 @@ config:
   inbox:databaseStorageSize: 20Gi
   inbox:protectData: "true"
   inbox:natsNamespace: INBOX_PROD
-  inbox:oauthWrappingKeyVersions: [v1]
+  inbox:oauthWrappingKeyVersions:
+    - v1
   inbox:oauthActiveWrappingKeyVersion: v1
+  inbox:image: cr.holdenitdown.net/rfhold/inbox@sha256:9e9157c31984e89fda59fe6f8e8a99e4a8aaec5239c440457dd03acdf45115b0
+  inbox:authentikBaseUrl: https://auth.holdenitdown.net
+  inbox:adminGroup: authentik Admins
+  inbox:bootstrapDomain: inbox.holdenitdown.net
 encryptionsalt: v1:GCVZewaS1vE=:v1:Klw1t4rDeFyQd0BW:HY3YmZ9/ZgDjTKxzFvBztnrmtDgsWw==
