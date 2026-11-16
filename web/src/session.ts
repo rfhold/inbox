@@ -23,7 +23,8 @@ export class Session {
   private pending?: Promise<void>;
   private loggingOut = false;
   private logoutPending = false;
-  constructor(private changed: (state: SessionState) => void, private notify = () => {}, private environment: () => Promise<string> = async () => 'default') {}
+  private automaticLogin = true;
+  constructor(private changed: (state: SessionState) => void, private notify = () => {}, private environment: () => Promise<string> = async () => 'default', private login = () => {}) {}
   private publish(state: SessionState) {this.state = state; this.changed(state);}
   lock(status: 'loading' | 'locked' | 'error' = 'locked') {
     this.generation++;
@@ -44,7 +45,14 @@ export class Session {
       const environment = identity?.mode === 'oidc' ? await this.environment() : '';
       if (identity?.mode === 'oidc') await reserveLogoutBarrier();
       if (generation !== this.generation) return;
-      if (!identity) {this.lock(); return;}
+      if (!identity) {
+        const login = this.automaticLogin;
+        this.automaticLogin = false;
+        this.lock();
+        if (login) this.login();
+        return;
+      }
+      this.automaticLogin = false;
       const signal = this.controller.signal;
       const assert = () => {
         if (generation !== this.generation || signal.aborted || (identity.expires_at !== null && Date.parse(identity.expires_at) <= Date.now()))
@@ -82,7 +90,12 @@ export class Session {
       throw new Error('Connect to verify your session');
     }
     const response = await fetch('/auth/session', {cache: 'no-store', credentials: 'same-origin', redirect: 'error', signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(10000)])});
-    if (response.status === 401) {try {sessionStorage.removeItem('inbox:local-mode');} catch {} return;}
+    if (response.status === 401) {
+      try {sessionStorage.removeItem('inbox:local-mode');} catch {}
+      const value = await response.json();
+      if (value?.mode !== 'oidc' || value.authenticated !== false) throw new Error('Invalid session');
+      return;
+    }
     if (!response.ok) throw new Error('Session unavailable');
     const value = await response.json();
     if (!value || !['oidc', 'disabled'].includes(value.mode) || value.authenticated !== true || !uuid.test(value.user_id) || typeof value.administrator !== 'boolean'
@@ -107,6 +120,7 @@ export class Session {
     }
   }
   async logout() {
+    this.automaticLogin = false;
     if (this.loggingOut) return;
     this.loggingOut = true;
     this.logoutPending = true;

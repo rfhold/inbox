@@ -5,6 +5,11 @@
   },
   "mcp": {
     "servers": {
+      "inbox-preview": {
+        "type": "remote",
+        "url": "https://preview-inbox.holdenitdown.net/mcp",
+        "protocol": "2026-07-28"
+      },
       "inbox": {
         "type": "remote",
         "url": "http://localhost:8080/mcp",

@@ -106,7 +106,7 @@ A single authenticated happy path does not establish user isolation.
 | Cursor transition | Old unwrapped page/change/arrival cursors fail; clients start fresh queries/watches and reconcile; ordinary restart preserves current-format cursor context. |
 | Stream isolation | Changes and arrival Events expose only authorized IDs; logout, expiry, and revocation terminate stream leases. |
 | Browser login | PKCE S256, state, nonce, correlation cookie, exact callback, safe return path, atomic consumption, and replay rejection. |
-| Browser CSRF | Missing, duplicate, malformed, or foreign Origin values reject cookie mutations, logout, and consent. |
+| Browser CSRF | Missing, duplicate, malformed, or foreign Origin values reject cookie mutations and logout. |
 | Browser RPC CSRF | Every cookie-authenticated gRPC-Web read, mutation, and stream requires exact Origin and `Sec-Fetch-Site: same-origin`; native RPCs require bearer credentials. |
 | Expected account | OIDC cookie RPCs require one canonical expected-user UUID; missing/duplicate/malformed/mismatched headers fail before reads, writes, and stream handlers. |
 | Cookie switch race | Session preflight for A followed by cookie B and expected-user A fails with 401; the client locks, aborts its generation, and notifies peers. |
@@ -115,13 +115,14 @@ A single authenticated happy path does not establish user isolation.
 | API bearer | Algorithm, type, issuer, audience, expiry, subject, scopes, and ID-token confusion tests fail closed. |
 | Authentik native profile | Exact `typ: JWT`, exact configured `azp`, bounded nonempty `uid`, and required `scope`; reject `at+jwt` and ID tokens. |
 | Provider mappings | Authentik `2025.10.2` supplies `uid`, `azp`, and `scope` only through access-token conversion; property mappings never inject them into ID tokens. |
-| Hosted MCP OAuth | Metadata/challenge, public-client identity, consent, exact resource/redirect, PKCE, one-shot code, refresh rotation, and reuse rejection. |
+| Hosted MCP OAuth | Metadata/challenge, public-client identity, automatic approval only for the exact resource/scope, rejected manual decisions, exact redirect, PKCE, one-shot code, refresh rotation, and reuse rejection. |
 | MCP credentials | Direct IdP tokens fail; wrong issuer/resource/client/scope and expired or revoked local credentials fail. |
 | MCP expiration boundary | At `exp`, new token admission fails and active response streams/Events end; zero clock skew permits no post-expiry grace. |
 | Auth persistence | Only protocol state bypasses NATS; auth-store loss fails access closed; mail acceptance still requires commit and durable result. |
 | Key lifecycle | Encrypted signing material, separate wrapping keys, verification overlap, restart, rotation, and isolated restore preserve policy; key overlap never extends token validity. |
 | Account storage | Account switch, logout, expiry, cross-tab changes, reconnect, and schema changes never expose another account's cache or drafts. |
 | Browser admission | Verify `/auth/session` before workspace/query/storage mount; validate environment before OIDC namespace selection. |
+| Automatic login | Initial verified OIDC 401 starts login once; malformed/failed probes, local mode, offline reload, logout, and lost verified sessions never trigger it. |
 | Account namespace | OIDC uses origin, encoded environment, and user UUID; disabled mode preserves `inbox:${origin}:shared` without automatic import. |
 | Account cancellation | Abort generation/request/stream work and clear query memory on account switch, logout, expiry, or failed session checks. |
 | Cross-tab checks | BroadcastChannel/storage locks plus focus, reconnect, and 10-second online checks never restore stale-account views. |
@@ -132,7 +133,7 @@ A single authenticated happy path does not establish user isolation.
 | Local offline reload | Only the explicit origin-bound verified-local-mode tab marker admits no-auth reload; absent marker requires online mode verification. |
 | Command storage | Unknown-result retry state stays account-specific; no automatic cross-account replay or no-auth draft import occurs. |
 | Infrastructure isolation | Separate namespaces, CNPG databases, raw/backup claims, secrets, auth applications, and keys across preview/production. |
-| Infrastructure configuration | Fixed stack identities, immutable digest, explicit auth/admin/bootstrap values, exclusive secret NATS credentials, and production protection. |
+| Infrastructure configuration | Fixed stack identities, immutable digest, explicit auth/admin/bootstrap values, exclusive secret NATS credentials or explicit preview-only anonymous opt-in, and production protection. |
 | Shared NATS | Every resource and outbox target uses its environment prefix; runtime creation preserves strict retention and durability. |
 | Release policy | Main targets one fixed preview; trusted signed stable tags promote prior immutable multiarchitecture images without a rebuild. |
 | Pipeline boundary | Tekton contains clone, secret scan, build/manifest, release-policy, promotion, and deploy tasks, not application or infrastructure tests. |

@@ -1,10 +1,6 @@
 //! Generic hosted OAuth; only verified upstream issuer/subject creates an Inbox user.
-use crate::auth::{Actor, Auth};
-use axum::{
-    Router,
-    http::header,
-    response::{Html, IntoResponse},
-};
+use crate::auth::Auth;
+use axum::{Router, http::StatusCode, response::IntoResponse};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use mcp::{server::*, *};
 use serde::Deserialize;
@@ -100,7 +96,6 @@ impl Hosted {
         policy.access_token_lifetime = access_token_lifetime;
         policy.clock_skew = Duration::ZERO;
         policy.signing_verification_overlap = Duration::from_secs(660);
-        let decision = policy.authorization_decision_endpoint.clone();
         let bytes =
             std::fs::read(&config.wrapping_keys_file).map_err(|_| "OAuth keyring unavailable")?;
         let file: Keyring = serde_json::from_slice(&bytes).map_err(|_| "invalid OAuth keyring")?;
@@ -121,7 +116,9 @@ impl Hosted {
             policy,
             store.clone(),
             Arc::new(oidc.clone()),
-            Arc::new(Consent { auth, decision }),
+            Arc::new(AutoApproveConsent {
+                resource: resource.clone(),
+            }),
             Arc::new(McpSystemOAuthClock),
             entropy,
             keyring,
@@ -219,62 +216,78 @@ impl OidcPrincipalMapper for Mapper {
         })
     }
 }
-struct Consent {
-    auth: Auth,
-    decision: String,
+struct AutoApproveConsent {
+    resource: String,
 }
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
-fn consent_cookie(tx: &str) -> String {
-    format!(
-        "__Host-inbox-consent-{}",
-        &crate::mutation::hash(tx.as_bytes())[..24]
-    )
-}
-impl OAuthConsentHandler for Consent {
+impl OAuthConsentHandler for AutoApproveConsent {
     fn present(&self, model: OAuthConsentModel) -> BoxFuture<OAuthConsentPresentation> {
-        let auth = self.auth.clone();
-        let decision = self.decision.clone();
+        let approved =
+            model.resource == self.resource && model.requested_scopes.as_slice() == ["inbox:mcp"];
         Box::pin(async move {
-            let csrf = auth.bind_cursor(
-                &auth.config().expect("hosted auth").public_url,
-                &Actor::local(),
-                "consent",
-                &model.transaction_id,
-            );
-            let body = format!(
-                "<!doctype html><meta charset=utf-8><title>Authorize Inbox</title><h1>Authorize Inbox access</h1><p>Client: {}</p><p>Resource: {}</p><p>Scopes: {}</p><form method=post action=\"{}\"><input type=hidden name=transaction_id value=\"{}\"><input type=hidden name=csrf value=\"{}\"><button name=decision value=approve>Allow</button><button name=decision value=deny>Deny</button></form>",
-                escape(&model.client_id),
-                escape(&model.resource),
-                escape(&model.requested_scopes.join(" ")),
-                escape(&decision),
-                escape(&model.transaction_id),
-                escape(&csrf)
-            );
-            let cookie =
-                crate::auth::set_cookie(&consent_cookie(&model.transaction_id), &csrf, 300);
-            OAuthConsentPresentation::Response(([(header::SET_COOKIE,cookie),(header::CACHE_CONTROL,"no-store".into()),(header::CONTENT_SECURITY_POLICY,"default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'".into())],Html(body)).into_response())
+            if approved {
+                OAuthConsentPresentation::Approved
+            } else {
+                OAuthConsentPresentation::Response(StatusCode::FORBIDDEN.into_response())
+            }
         })
     }
-    fn validate_decision(&self, e: OAuthConsentDecisionEvidence) -> BoxFuture<bool> {
-        let auth = self.auth.clone();
-        Box::pin(async move {
-            auth.csrf(&e.headers)
-                && crate::auth::cookie(&e.headers, &consent_cookie(&e.transaction_id))
-                    == Some(e.csrf.expose_secret())
-                && auth
-                    .unbind_cursor(
-                        &auth.config().expect("hosted auth").public_url,
-                        &Actor::local(),
-                        "consent",
-                        e.csrf.expose_secret(),
-                    )
-                    .is_ok_and(|v| v == e.transaction_id)
-        })
+    fn validate_decision(&self, _: OAuthConsentDecisionEvidence) -> BoxFuture<bool> {
+        Box::pin(async { false })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn automatic_approval_requires_exact_resource_and_scope() {
+        let policy = AutoApproveConsent {
+            resource: "https://inbox.example/mcp".into(),
+        };
+        for (resource, scopes, allowed) in [
+            ("https://inbox.example/mcp", vec!["inbox:mcp"], true),
+            ("https://other.example/mcp", vec!["inbox:mcp"], false),
+            ("https://inbox.example/mcp/", vec!["inbox:mcp"], false),
+            ("https://inbox.example/mcp", vec![], false),
+            ("https://inbox.example/mcp", vec!["inbox:api"], false),
+            (
+                "https://inbox.example/mcp",
+                vec!["inbox:mcp", "inbox:api"],
+                false,
+            ),
+            (
+                "https://inbox.example/mcp",
+                vec!["inbox:mcp", "inbox:mcp"],
+                false,
+            ),
+        ] {
+            let result = policy
+                .present(OAuthConsentModel {
+                    client_id: "untrusted-client".into(),
+                    client_display_name: Some("<script>untrusted</script>".into()),
+                    resource: resource.into(),
+                    requested_scopes: scopes.into_iter().map(String::from).collect(),
+                    already_granted_scopes: vec![],
+                    transaction_id: "transaction".into(),
+                })
+                .await;
+            match result {
+                OAuthConsentPresentation::Approved => assert!(allowed),
+                OAuthConsentPresentation::Response(response) => {
+                    assert!(!allowed);
+                    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+                }
+            }
+        }
+        assert!(
+            !policy
+                .validate_decision(OAuthConsentDecisionEvidence {
+                    transaction_id: "transaction".into(),
+                    csrf: McpOAuthSecret::new("untrusted"),
+                    headers: Default::default(),
+                })
+                .await
+        );
     }
 }

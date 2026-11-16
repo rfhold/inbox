@@ -48,7 +48,7 @@ Paths below are repository-root-relative.
 - Require two-user negative checks and normal address-based cross-user delivery without mailbox-directory disclosure.
 - Check global domain reads, administrator-group-only management, and no administrator bypass for another user's mail.
 - Check PKCE, state, nonce, cookies, exact Origin, CSRF, logout, revocation, and bounded stream auth leases.
-- Check local hosted-MCP issuer/resource binding, human consent, refresh rotation, durable grants, encrypted keys, and direct-IdP-token rejection.
+- Check local hosted-MCP issuer/resource binding, verified human identity, exact resource/scope auto-approval, rejected manual decisions, refresh rotation, durable grants, encrypted keys, and direct-IdP-token rejection.
 - Check zero hosted-MCP clock skew: admission fails at `exp`, and active streams/Events share that deadline without grace.
 - Distinguish verification-key overlap from token lifetime; retained keys never authorize an expired token.
 - Check account-specific caches, drafts, queries, cursors, and uncertain commands; prohibit automatic no-auth draft import.
@@ -66,7 +66,7 @@ Paths below are repository-root-relative.
 - Check fixed main preview and trusted signed stable-tag promotion of prior immutable images without a rebuild.
 - Reject Tekton unit, integration, browser, infrastructure, and smoke-test tasks; preserve local validation and separate manual operator gates.
 - Check production data protection, actual Ceph retention, isolated recovery, and private SMTP without public MX or SMTP submission claims.
-- Check fixed environment config, immutable image digests, and exclusive secret NATS credential methods; anonymous hosted configuration must fail.
+- Check fixed environment config, immutable image digests, and exclusive secret NATS credential methods; anonymous hosted configuration requires explicit preview-only opt-in and must fail in production.
 - Check hosted `INBOX_NATS_NAMESPACE` and three-replica declarations without claims of proven broker ACLs, capacity, or failure domains.
 - Check SMTP opt-in requires both namespace and pod selectors; default Service and policy expose no SMTP.
 - Check the root-only Docker build context and pinned remote Waltr dependency without a sibling context or vendor tree.

@@ -32,6 +32,57 @@ it('fails closed on 401, network failure, malformed identity and expired identit
   await session.resolve();
   expect(current.status).toBe('error');
 });
+it('starts OIDC once only after a verified unauthenticated response', async () => {
+  const login = vi.fn();
+  session = new Session(state => {current = state;}, undefined, undefined, login);
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({mode: 'oidc', authenticated: false}, {status: 401})));
+  await session.resolve();
+  expect(current.status).toBe('locked');
+  expect(login).toHaveBeenCalledOnce();
+  await session.resolve();
+  expect(login).toHaveBeenCalledOnce();
+});
+it('does not start login on failed or malformed probes or offline reload', async () => {
+  const login = vi.fn();
+  session = new Session(state => {current = state;}, undefined, undefined, login);
+  for (const response of [new Response('{}', {status: 401}), Response.json({mode: 'disabled', authenticated: false}, {status: 401}), new Response(null, {status: 503}), Response.json({...identity(), expires_at: new Date(0).toISOString()})]) {
+    vi.stubGlobal('fetch', vi.fn(async () => response));
+    await session.resolve();
+    expect(current.status).toBe('error');
+  }
+  vi.stubGlobal('fetch', vi.fn(async () => {throw new TypeError('offline');}));
+  await session.resolve();
+  vi.stubGlobal('navigator', {onLine: false});
+  await session.resolve();
+  expect(login).not.toHaveBeenCalled();
+});
+it('does not restart login after logout or loss of an already verified session', async () => {
+  const login = vi.fn();
+  session = new Session(state => {current = state;}, undefined, undefined, login);
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json(identity())));
+  await session.resolve();
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url === '/auth/logout' ? new Response(null, {status: 204}) : Response.json({mode: 'oidc', authenticated: false}, {status: 401})));
+  await session.resolve();
+  await session.logout();
+  await session.resolve();
+  expect(current.status).toBe('locked');
+  expect(login).not.toHaveBeenCalled();
+});
+it('does not redirect from a stale probe after logout starts', async () => {
+  const login = vi.fn();
+  session = new Session(state => {current = state;}, undefined, undefined, login);
+  let finish!: (response: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => url === '/auth/logout'
+    ? new Response(null, {status: 204})
+    : new Promise<Response>(resolve => {finish = resolve;})));
+  const probe = session.resolve();
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+  await session.logout();
+  finish(Response.json({mode: 'oidc', authenticated: false}, {status: 401}));
+  await probe;
+  expect(current.status).toBe('locked');
+  expect(login).not.toHaveBeenCalled();
+});
 it('isolates two accounts and retains legacy noauth drafts without importing them', async () => {
   let value = identity();
   vi.stubGlobal('fetch', vi.fn(async () => Response.json(value)));
@@ -85,9 +136,12 @@ it('revokes in-memory access on remote account changes, logout and session expir
   expect(last.signal.aborted).toBe(true);
 });
 it('retains the exact explicit noauth namespace', async () => {
+  const login = vi.fn();
+  session = new Session(state => {current = state;}, undefined, undefined, login);
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({mode: 'disabled', authenticated: true, user_id: '00000000-0000-4000-8000-000000000001', administrator: true, expires_at: null})));
   await session.resolve();
   expect(account().namespace).toBe(`inbox:${location.origin}:shared`);
+  expect(login).not.toHaveBeenCalled();
 });
 it('cannot reopen a workspace while durable logout is still pending', async () => {
   let finish!: () => void;
@@ -142,7 +196,7 @@ it('uses only a prior noauth tab binding for offline reopening and clears it on 
   await session.resolve();
   expect(account().identity.mode).toBe('disabled');
   vi.stubGlobal('navigator', {onLine: true});
-  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', {status: 401})));
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({mode: 'oidc', authenticated: false}, {status: 401})));
   await session.resolve();
   expect(current.status).toBe('locked');
   vi.stubGlobal('navigator', {onLine: false});
@@ -195,7 +249,7 @@ it('persists offline logout in the fallback if the reserved localStorage update 
       revoked = true; return new Response(null, {status: 204});
     }
     probes++;
-    return revoked ? new Response(null, {status: 401}) : Response.json(identity());
+    return revoked ? Response.json({mode: 'oidc', authenticated: false}, {status: 401}) : Response.json(identity());
   }));
   await session.resolve();
   const old = account();

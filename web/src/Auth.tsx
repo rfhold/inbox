@@ -20,7 +20,9 @@ export default function Auth() {
     const value = await response.json();
     if (typeof value.environment !== 'string' || !value.environment || value.environment.length > 128) throw new Error('Invalid environment');
     return value.environment;
-  })().catch(error => {environment = undefined; throw error;}));
+  })().catch(error => {environment = undefined; throw error;}), () => {
+    location.replace(`/auth/login?return_to=${encodeURIComponent(location.pathname + location.search + location.hash)}`);
+  });
   let poll: ReturnType<typeof setInterval>;
   onMount(() => {
     channel?.postMessage('changed');

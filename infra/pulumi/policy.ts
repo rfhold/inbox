@@ -1,5 +1,21 @@
 const segment = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+export function natsAuthenticationEnv<T>(
+  stack: string, allowAnonymous = false, user?: T, password?: T, credentials?: T,
+): Record<string, T | string> {
+  if (allowAnonymous) {
+    if (stack !== "preview") throw new Error("allowAnonymousNats is allowed only on the preview stack");
+    if (user || password || credentials) throw new Error("allowAnonymousNats cannot be combined with NATS credentials");
+    return {};
+  }
+  if ((!!user !== !!password) || (!!credentials === !!user)) {
+    throw new Error("configure exactly natsUser+natsPassword or secret natsCredentials; anonymous NATS requires preview allowAnonymousNats");
+  }
+  return credentials
+    ? { INBOX_NATS_CREDENTIALS_FILE: "/var/run/secrets/inbox/nats/nats.creds" }
+    : { INBOX_NATS_USER: user!, INBOX_NATS_PASSWORD: password! };
+}
+
 export function requireImmutableImage(value: string): string {
   if (!/^[^\s@]+@sha256:[0-9a-f]{64}$/.test(value)) {
     throw new Error("image must use an immutable sha256 digest");

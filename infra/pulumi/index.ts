@@ -5,7 +5,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as random from "@pulumi/random";
 import * as tls from "@pulumi/tls";
 import { BrowserApplication } from "./authentik";
-import { requireImmutableImage, validateEnvironment, validateHostname, validateHttpsOrigin, validateSegment, validateWrappingKeys } from "./policy";
+import { natsAuthenticationEnv, requireImmutableImage, validateEnvironment, validateHostname, validateHttpsOrigin, validateSegment, validateWrappingKeys } from "./policy";
 
 const config = new pulumi.Config();
 const namespaceName = validateSegment(config.require("namespace"), "namespace");
@@ -34,9 +34,7 @@ validateWrappingKeys(versions, activeVersion);
 const natsUser = config.getSecret("natsUser");
 const natsPassword = config.getSecret("natsPassword");
 const natsCredentials = config.getSecret("natsCredentials");
-if ((!!natsUser !== !!natsPassword) || (!!natsCredentials === !!natsUser)) {
-  throw new Error("configure exactly natsUser+natsPassword or secret natsCredentials; anonymous shared NATS is not allowed");
-}
+const natsAuthEnv = natsAuthenticationEnv(environment, config.getBoolean("allowAnonymousNats") ?? false, natsUser, natsPassword, natsCredentials);
 const smtpNamespace = config.get("smtpSourceNamespace");
 const smtpPodLabels = config.getObject<Record<string, string>>("smtpSourcePodLabels");
 if (!!smtpNamespace !== !!smtpPodLabels || (smtpPodLabels && Object.keys(smtpPodLabels).length === 0)) {
@@ -52,21 +50,29 @@ const namespace = new k8s.core.v1.Namespace("inbox-namespace", {
 }, protectedData);
 const bucket = (name: string, storage: string) => new k8s.apiextensions.CustomResource(`inbox-${name}-bucket`, {
   apiVersion: "objectbucket.io/v1alpha1", kind: "ObjectBucketClaim",
-  metadata: { name: `inbox-${name}`, namespace: namespace.metadata.name, labels },
+  metadata: {
+    name: `inbox-${name}`, namespace: namespace.metadata.name, labels,
+    annotations: { "pulumi.com/waitFor": "jsonpath={.status.phase}=Bound" },
+  },
   spec: { storageClassName: storage, generateBucketName: `${slug}-${name}` },
 }, { dependsOn: [namespace], ...protectedData });
 const rawBucket = bucket("raw", bucketStorageClass);
 const backupBucket = bucket("backups", backupStorageClass);
 const bucketConfig = (name: string, claim: k8s.apiextensions.CustomResource) =>
   pulumi.all([namespace.metadata.name, claim.id]).apply(([ns]) =>
-    k8s.core.v1.ConfigMap.get(`inbox-${name}-generated-config`, `${ns}/inbox-${name}`));
+    k8s.core.v1.ConfigMap.get(`inbox-${name}-generated-config`, `${ns}/inbox-${name}`, { dependsOn: [claim] }));
 const rawConfig = bucketConfig("raw", rawBucket);
 const backupConfig = bucketConfig("backups", backupBucket);
 const rawSecret = pulumi.all([namespace.metadata.name, rawBucket.id]).apply(([ns]) =>
-  k8s.core.v1.Secret.get("inbox-raw-generated-secret", `${ns}/inbox-raw`));
+  k8s.core.v1.Secret.get("inbox-raw-generated-secret", `${ns}/inbox-raw`, { dependsOn: [rawBucket] }));
+const backupSecret = pulumi.all([namespace.metadata.name, backupBucket.id]).apply(([ns]) =>
+  k8s.core.v1.Secret.get("inbox-backups-generated-secret", `${ns}/inbox-backups`, { dependsOn: [backupBucket] }));
 const databaseCluster = new k8s.apiextensions.CustomResource("inbox-postgres", {
   apiVersion: "postgresql.cnpg.io/v1", kind: "Cluster",
-  metadata: { name: "inbox-postgres", namespace: namespace.metadata.name, labels },
+  metadata: {
+    name: "inbox-postgres", namespace: namespace.metadata.name, labels,
+    annotations: { "pulumi.com/waitFor": "condition=Ready" },
+  },
   spec: {
     instances: 1, enableSuperuserAccess: false,
     backup: {
@@ -84,7 +90,7 @@ const databaseCluster = new k8s.apiextensions.CustomResource("inbox-postgres", {
     storage: { size: databaseStorageSize, storageClass },
     resources: { requests: { cpu: "100m", memory: "256Mi" }, limits: { cpu: "1", memory: "1Gi" } },
   },
-}, { dependsOn: [backupBucket], ...protectedData });
+}, { dependsOn: [backupBucket, backupConfig, backupSecret], ...protectedData });
 const scheduledBackup = new k8s.apiextensions.CustomResource("inbox-postgres-backup", {
   apiVersion: "postgresql.cnpg.io/v1", kind: "ScheduledBackup",
   metadata: { name: "inbox-postgres", namespace: namespace.metadata.name, labels },
@@ -111,7 +117,9 @@ const oidc = new BrowserApplication("inbox-identity", {
   displayName, slug, issuerBaseUrl: authentikBaseUrl, publicUrl, signingKeyId: signingKey.id, protectData,
 });
 const pgSecret = pulumi.all([namespace.metadata.name, databaseCluster.id]).apply(([ns]) =>
-  k8s.core.v1.Secret.get("inbox-postgres-generated-app", `${ns}/inbox-postgres-app`));
+  k8s.core.v1.Secret.get("inbox-postgres-generated-app", `${ns}/inbox-postgres-app`, { dependsOn: [databaseCluster] }));
+const pgCaSecret = pulumi.all([namespace.metadata.name, databaseCluster.id]).apply(([ns]) =>
+  k8s.core.v1.Secret.get("inbox-postgres-generated-ca", `${ns}/inbox-postgres-ca`, { dependsOn: [databaseCluster] }));
 const decodePg = (key: string) => pgSecret.data.apply((values) => Buffer.from(values[key], "base64").toString("utf8"));
 const decodeRaw = (key: string) => rawSecret.data.apply((values) => Buffer.from(values[key], "base64").toString("utf8"));
 const databaseUrl = pulumi.all([decodePg("username"), decodePg("password")]).apply(([username, password]) =>
@@ -142,8 +150,7 @@ const appSecret = new k8s.core.v1.Secret("inbox-app", {
     INBOX_OAUTH_WRAPPING_KEYS_FILE: "/var/run/secrets/inbox/oauth/keyring.json",
     INBOX_NATS_URL: "nats://nats.nats.svc.cluster.local:4222",
     INBOX_NATS_NAMESPACE: natsNamespace, INBOX_NATS_REPLICAS: "3",
-    ...(natsCredentials ? { INBOX_NATS_CREDENTIALS_FILE: "/var/run/secrets/inbox/nats/nats.creds" } :
-      { INBOX_NATS_USER: natsUser!, INBOX_NATS_PASSWORD: natsPassword! }),
+    ...natsAuthEnv,
     INBOX_DOMAIN: bootstrapDomain, INBOX_ENVIRONMENT: environment,
     INBOX_HTTP_ADDR: "0.0.0.0:8080", INBOX_SMTP_ADDR: "0.0.0.0:2525",
     INBOX_WEB_DIR: "/app/web",
@@ -154,7 +161,7 @@ const appSecret = new k8s.core.v1.Secret("inbox-app", {
     OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf", OTEL_SERVICE_NAME: "inbox-server",
     OTEL_RESOURCE_ATTRIBUTES: `service.namespace=inbox,deployment.environment.name=${environment}`,
   },
-}, { dependsOn: [database, oidc, rawBucket], ...protectedData });
+}, { dependsOn: [database, oidc, rawBucket, rawConfig, rawSecret, pgSecret], ...protectedData });
 const deployment = new k8s.apps.v1.Deployment("inbox", {
   metadata: {
     name: "inbox", namespace: namespace.metadata.name, labels: workloadLabels,
@@ -195,7 +202,7 @@ const deployment = new k8s.apps.v1.Deployment("inbox", {
       },
     },
   },
-}, { dependsOn: [appSecret, wrappingSecret] });
+}, { dependsOn: [appSecret, wrappingSecret, database, pgCaSecret, ...(credentialsSecret ? [credentialsSecret] : [])] });
 new k8s.networking.v1.NetworkPolicy("inbox-network", {
   metadata: { name: "inbox", namespace: namespace.metadata.name, labels },
   spec: {

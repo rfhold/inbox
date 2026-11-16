@@ -65,6 +65,10 @@ An ordinary process restart preserves valid current-format cursors within the sa
 ## Browser and API access
 
 Browser login uses Authorization Code with PKCE S256, independent random state, nonce, and browser correlation.
+On initial load, a verified OIDC unauthenticated session response starts login automatically without an Inbox sign-in page.
+Failed probes and offline reloads stay locked.
+Logout and loss of an already verified session do not automatically restart login in that page lifecycle.
+A fresh online load starts login again only after the server verifies that no session exists.
 Durable one-shot attempts enforce expiry, atomic callback consumption, and replay rejection.
 Callbacks validate signature, algorithm, exact issuer, audience, time claims, subject, nonce, and the exact redirect URI.
 Return destinations permit only safe local paths.
@@ -175,7 +179,9 @@ Protected-resource metadata identifies the exact MCP resource and the local auth
 Direct identity-provider tokens never authorize hosted `/mcp`.
 The generic Waltr MCP implementation owns protocol mechanics; Inbox maps verified identity to its per-user authorization domain.
 
-Public clients complete Authorization Code with PKCE S256 and explicit consent.
+Public clients complete Authorization Code with PKCE S256.
+After verified human authentication, Inbox follows the sibling auto-approval policy only for the exact configured MCP resource and sole `inbox:mcp` scope.
+Other resources or scope sets fail closed; manual consent submissions cannot grant access.
 Authorization binds client, exact redirect, resource, scope, human owner, and code challenge.
 Client registration and metadata discovery retain the generic implementation's hardened destination and redirect checks.
 Tokens bind the local issuer, exact resource audience, client, subject, lifetime, and required scopes.

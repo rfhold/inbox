@@ -3,6 +3,30 @@ import { create, toBinary } from '@bufbuild/protobuf';
 import { ListMailboxesResponseSchema, ListMessagesResponseSchema } from '../src/gen/inbox/v1/inbox_pb';
 import { domainFields, domainReply, grpcFrame, openDrafts } from './helpers';
 
+test('initial OIDC admission starts login automatically and preserves the local return path', async ({page, context}) => {
+  await context.route('**/auth/session', route => route.fulfill({status: 401, json: {mode: 'oidc', authenticated: false}}));
+  await context.route('**/auth/login?**', route => route.fulfill({contentType: 'text/html', body: '<h1>Provider sign-in</h1>'}));
+  await page.goto('/?view=drafts#selected');
+  await expect(page.getByRole('heading', {name: 'Provider sign-in'})).toBeVisible();
+  const destination = new URL(page.url());
+  expect(destination.pathname).toBe('/auth/login');
+  expect(destination.searchParams.get('return_to')).toBe('/?view=drafts#selected');
+});
+
+test('failed and malformed session probes stay locked without an automatic redirect', async ({page, context}) => {
+  let malformed = false;
+  let logins = 0;
+  await context.route('**/auth/session', route => route.fulfill(malformed ? {status: 401, json: {}} : {status: 503}));
+  await context.route('**/auth/login?**', route => {logins++; return route.fulfill({body: 'Unexpected login'});});
+  await page.goto('/');
+  await expect(page.getByText('Unable to verify your session. Connect and try again.', {exact: true})).toBeVisible();
+  malformed = true;
+  await page.getByRole('button', {name: 'Check session'}).click();
+  await expect(page.getByText('Unable to verify your session. Connect and try again.', {exact: true})).toBeVisible();
+  expect(logins).toBe(0);
+  await expect(page.getByRole('button', {name: 'Compose', exact: true})).toHaveCount(0);
+});
+
 test('account changes, offline locking, logout and other tabs never expose another account draft', async ({page, context}) => {
   const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -12,6 +36,7 @@ test('account changes, offline locking, logout and other tabs never expose anoth
     mode: 'oidc', authenticated: true, user_id: principal, administrator: false, expires_at: new Date(Date.now() + 60000).toISOString(),
   }}) : route.fulfill({status: 401, json: {mode: 'oidc', authenticated: false}}));
   await context.route('**/auth/logout', route => {principal = undefined; return route.fulfill({status: 204});});
+  await context.route('**/auth/login?**', route => route.fulfill({contentType: 'text/html', body: '<h1>Provider sign-in</h1>'}));
   await context.route('**/inbox.v1.MailService/*', async route => {
     if (route.request().headers()['x-inbox-expected-user'] !== principal) return route.fulfill({status: 401});
     const method = route.request().url().split('/').pop();
@@ -47,10 +72,11 @@ test('account changes, offline locking, logout and other tabs never expose anoth
   await expect.poll(() => other.evaluate(() => localStorage.getItem('inbox:logout-barrier:v1'))).toBe('0');
   await other.close();
   await page.reload();
-  await expect(page.getByRole('button', {name: 'Check session'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Provider sign-in'})).toBeVisible();
+  await expect(page.getByText('Private draft A', {exact: true})).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => localStorage.getItem('inbox:logout-barrier:v1'))).toBe('0');
   principal = A;
-  await page.reload();
+  await page.goto('/');
   await openDrafts(page);
   await expect(page.getByText('Private draft A', {exact: true})).toBeVisible();
 });

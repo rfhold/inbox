@@ -1641,7 +1641,7 @@ mod tests {
     }
     #[tokio::test]
     #[ignore = "requires explicitly isolated INBOX_TEST_DATABASE_URL; creates retained private auth schema and generic OAuth protocol state"]
-    async fn hosted_oauth_pkce_consent_mcp_identity_and_revocation() {
+    async fn hosted_oauth_pkce_auto_approval_mcp_identity_and_revocation() {
         use crate::pb::{CreateMailboxRequest, CreateMailboxResponse};
         use mcp::{client::*, *};
         use prost::Message;
@@ -1758,15 +1758,6 @@ mod tests {
             } else {
                 location.to_owned()
             }
-        }
-        fn hidden(html: &str, name: &str) -> String {
-            html.split(&format!("name={name} value=\""))
-                .nth(1)
-                .unwrap()
-                .split('"')
-                .next()
-                .unwrap()
-                .to_owned()
         }
         let provider_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let issuer = format!("http://{}", provider_listener.local_addr().unwrap());
@@ -1955,6 +1946,13 @@ mod tests {
             if !response.status().is_redirection() {
                 break;
             }
+            if response.headers()["location"]
+                .to_str()
+                .unwrap()
+                .starts_with(&format!("{redirect}?"))
+            {
+                break;
+            }
             let next = local_url(
                 &endpoint,
                 &public,
@@ -1968,41 +1966,10 @@ mod tests {
         }
         assert_eq!(
             response.status(),
-            reqwest::StatusCode::OK,
-            "OIDC must reach explicit consent"
+            reqwest::StatusCode::SEE_OTHER,
+            "verified OIDC must return directly to the registered client"
         );
-        cookies(&response, &mut jar);
-        let consent = response.text().await.unwrap();
-        assert!(!consent.contains("<script>untrusted</script>"));
-        let transaction = hidden(&consent, "transaction_id");
-        let csrf = hidden(&consent, "csrf");
-        let form = [
-            ("transaction_id", transaction.as_str()),
-            ("csrf", csrf.as_str()),
-            ("decision", "approve"),
-        ];
-        let denied = client
-            .post(format!("{endpoint}/oauth/authorize/decision"))
-            .header("Cookie", cookie_header(&jar))
-            .form(&form)
-            .send()
-            .await
-            .unwrap();
-        assert!(
-            denied.status().is_client_error(),
-            "consent requires exact Origin and Fetch-Site"
-        );
-        let approved = client
-            .post(format!("{endpoint}/oauth/authorize/decision"))
-            .header("Cookie", cookie_header(&jar))
-            .header("Origin", &public)
-            .header("Sec-Fetch-Site", "same-origin")
-            .form(&form)
-            .send()
-            .await
-            .unwrap();
-        assert!(approved.status().is_redirection());
-        let returned = Url::parse(approved.headers()["location"].to_str().unwrap())
+        let returned = Url::parse(response.headers()["location"].to_str().unwrap())
             .unwrap()
             .query_pairs()
             .into_owned()

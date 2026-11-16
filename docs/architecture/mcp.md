@@ -37,7 +37,8 @@ The repository's [`opencode.jsonc`](../../opencode.jsonc) configures the same-or
 
 This configuration targets explicit local no-auth mode; `oauth: false` does not create an authorization boundary.
 Keep this endpoint on loopback within a trusted workspace.
-Hosted OIDC deployments require OAuth client discovery and human consent under the [auth contract](spec/auth.md#human-authorized-hosted-mcp).
+Hosted OIDC deployments require OAuth client discovery and verified human authentication under the [auth contract](spec/auth.md#human-authorized-hosted-mcp).
+Inbox automatically approves only its exact MCP resource and `inbox:mcp` scope, without a separate consent page.
 Do not copy this local no-auth client configuration to a hosted environment.
 Browser, API, and MCP credentials resolve to the same user, not a shared mail workspace.
 Domain reads remain global; domain management requires administrator-group membership.

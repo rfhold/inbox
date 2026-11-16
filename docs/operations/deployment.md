@@ -43,9 +43,14 @@ Names below use the `inbox:` config namespace.
 | `bootstrapDomain` | Fully qualified domain for one-time fresh-instance bootstrap; never a mailbox or mail migration instruction. |
 | `natsUser` and `natsPassword` | Secret username/password pair; mutually exclusive with `natsCredentials`. |
 | `natsCredentials` | Secret complete NATS credentials-file contents; alternative to the username/password pair. |
+| `allowAnonymousNats` | Boolean, default `false`; only explicit `true` on the `preview` stack permits no NATS credentials. |
 
-The Pulumi program rejects absent NATS credentials, partial username/password pairs, and simultaneous credential methods.
-Anonymous shared NATS configuration fails infrastructure validation, even though the local runtime supports anonymous private development.
+Without the preview exception, the Pulumi program rejects absent NATS credentials.
+It always rejects partial username/password pairs and simultaneous credential methods.
+The preview stack opts into anonymous shared NATS with `allowAnonymousNats: true`.
+This opt-in rejects any NATS credentials; production and other stacks reject the opt-in itself.
+Production requires exactly one complete credential method and fails infrastructure validation without it.
+This exception changes only broker authentication; application OIDC remains mandatory.
 The stack files also declare resource identities, storage settings, and OAuth wrapping-key versions.
 `oauthWrappingKeyVersions` contains unique DNS labels; `oauthActiveWrappingKeyVersion` must select one declared version.
 Both initial declarations use version `v1`; key rotation requires its own recovery review and approval.
@@ -61,6 +66,9 @@ The hosted runtime receives these NATS settings:
 | `INBOX_NATS_REPLICAS` | `3` |
 | `INBOX_NATS_USER` and `INBOX_NATS_PASSWORD` | Secret pair, only with username/password authentication. |
 | `INBOX_NATS_CREDENTIALS_FILE` | `/var/run/secrets/inbox/nats/nats.creds`, only with file credentials. |
+
+Anonymous preview emits no NATS authentication variables, credentials Secret, or credentials-file mount.
+It retains the explicit `INBOX_PREVIEW` namespace and three JetStream replicas.
 
 ## Identity-provider constraint
 
@@ -113,9 +121,12 @@ The [Compose file](../../compose.yml) uses the same root context.
 
 Hosted Inbox uses the shared homelab NATS service, not a broker per environment.
 The application creates its required JetStream resources at runtime under an explicit environment prefix.
-Every stream, subject, object store, durable consumer, cursor generation, and outbox publication target respects that environment boundary.
-Preview cannot consume production commands, staged payloads, results, changes, or arrival cursors.
-Credentials and broker ACLs must enforce the same boundary.
+Every stream, subject, object store, durable consumer, cursor generation, and outbox publication target uses its environment prefix.
+These prefixes prevent accidental collisions, not malicious cross-application access.
+Anonymous preview accepts the risk that other clients with broker access can read, publish, or alter its NATS resources.
+Application OIDC does not protect direct broker access.
+Production requires credentials and broker ACLs that enforce its environment boundary.
+Broker changes, per-application account migrations, and Walter migrations remain deferred and require separate approval.
 
 The [command contract](../architecture/spec/commands.md) retains strict durability, retention, capacity, and no-fallback requirements.
 Environment isolation never relaxes pending-payload protection, outbox recovery, or durable result confirmation.
