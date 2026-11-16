@@ -10,7 +10,7 @@
         "url": "https://preview-inbox.holdenitdown.net/mcp",
         "protocol": "2026-07-28"
       },
-      "inbox": {
+      "inbox-local": {
         "type": "remote",
         "url": "http://localhost:8080/mcp",
         "protocol": "2026-07-28",
