@@ -1,4 +1,5 @@
 config:
+  kubernetes:enableSecretMutable: "true"
   kubernetes:context: pantheon
   inbox:namespace: inbox
   inbox:hostname: inbox.holdenitdown.net

@@ -3,7 +3,7 @@ kind: PipelineRun
 metadata:
   name: inbox-release
   annotations:
-    pipelinesascode.tekton.dev/task: "[https://git.holdenitdown.net/rfhold/homelab/raw/commit/4ee9dcb016d56049f9c56b7ef22cb340ddaa20df/src/components/tekton-tasks/service-promote-v1.yaml, https://git.holdenitdown.net/rfhold/homelab/raw/commit/4ee9dcb016d56049f9c56b7ef22cb340ddaa20df/src/components/tekton-tasks/service-pulumi-up-v1.yaml]"
+    pipelinesascode.tekton.dev/task: "[https://git.holdenitdown.net/rfhold/homelab/raw/commit/d00eb0fc42740a771bcfb96886c3574f8a1fd41e/src/components/tekton-tasks/service-promote-v1.yaml, https://git.holdenitdown.net/rfhold/homelab/raw/commit/d00eb0fc42740a771bcfb96886c3574f8a1fd41e/src/components/tekton-tasks/service-pulumi-up-v1.yaml]"
     pipelinesascode.tekton.dev/on-cel-expression: 'event == "push" && target_branch.matches("^refs/tags/v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")'
     pipelinesascode.tekton.dev/max-keep-runs: "2"
 spec:
@@ -201,6 +201,10 @@ spec:
             value: 'false'
           - name: openbao-enabled
             value: 'false'
+          - name: nats-enabled
+            value: 'true'
+          - name: nats-repository
+            value: rfhold/inbox
         workspaces:
           - name: source
             workspace: source

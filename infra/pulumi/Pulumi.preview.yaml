@@ -1,4 +1,5 @@
 config:
+  kubernetes:enableSecretMutable: "true"
   kubernetes:context: pantheon
   inbox:namespace: inbox-preview
   inbox:hostname: preview-inbox.holdenitdown.net
@@ -13,10 +14,10 @@ config:
   inbox:databaseStorageSize: 10Gi
   inbox:protectData: "false"
   inbox:natsNamespace: INBOX_PREVIEW
-  inbox:allowAnonymousNats: "true"
+  inbox:allowAnonymousNats: "false"
   inbox:oauthWrappingKeyVersions: [v1]
   inbox:oauthActiveWrappingKeyVersion: v1
-  inbox:image: cr.holdenitdown.net/rfhold/inbox@sha256:0d8081813fb0e8582ac657a8a48f9f484d1d9ee897613ec3daea341764e8d34b
+  inbox:image: cr.holdenitdown.net/rfhold/inbox@sha256:b7975e2abcec7d367f4fa07902b541ee310657b3b356fd26946953fda89c4059
   inbox:authentikBaseUrl: https://auth.holdenitdown.net
   inbox:adminGroup: authentik Admins
   inbox:bootstrapDomain: inbox.test

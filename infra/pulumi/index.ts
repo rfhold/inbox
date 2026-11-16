@@ -5,7 +5,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as random from "@pulumi/random";
 import * as tls from "@pulumi/tls";
 import { BrowserApplication } from "./authentik";
-import { natsAuthenticationEnv, requireImmutableImage, validateEnvironment, validateHostname, validateHttpsOrigin, validateSegment, validateWrappingKeys } from "./policy";
+import { natsAuthenticationEnv, requireImmutableImage, validateEnvironment, validateHostname, validateHttpsOrigin, validateNatsCredentials, validateSegment, validateWrappingKeys } from "./policy";
 
 const config = new pulumi.Config();
 const namespaceName = validateSegment(config.require("namespace"), "namespace");
@@ -33,8 +33,19 @@ const activeVersion = config.require("oauthActiveWrappingKeyVersion");
 validateWrappingKeys(versions, activeVersion);
 const natsUser = config.getSecret("natsUser");
 const natsPassword = config.getSecret("natsPassword");
-const natsCredentials = config.getSecret("natsCredentials");
-const natsAuthEnv = natsAuthenticationEnv(environment, config.getBoolean("allowAnonymousNats") ?? false, natsUser, natsPassword, natsCredentials);
+const configuredNatsCredentials = config.getSecret("natsCredentials");
+const allowAnonymousNats = config.getBoolean("allowAnonymousNats") ?? false;
+const environmentNatsCredentials = process.env.PULUMI_NATS_CREDENTIALS;
+if (environmentNatsCredentials !== undefined && configuredNatsCredentials) throw new Error("Configure NATS credentials through either the environment or Pulumi config, not both");
+const useEnvironmentNatsCredentials = environmentNatsCredentials !== undefined ||
+  (!configuredNatsCredentials && !natsUser && !natsPassword && !allowAnonymousNats);
+const natsCredentialsStash = useEnvironmentNatsCredentials ? new pulumi.Stash("nats-credentials", {
+  input: pulumi.secret(environmentNatsCredentials ?? ""),
+}, { additionalSecretOutputs: ["output"] }) : undefined;
+const natsCredentials = natsCredentialsStash
+  ? natsCredentialsStash.output.apply(value => validateNatsCredentials(String(value ?? "")))
+  : configuredNatsCredentials;
+const natsAuthEnv = natsAuthenticationEnv(environment, allowAnonymousNats, natsUser, natsPassword, natsCredentials);
 const smtpNamespace = config.get("smtpSourceNamespace");
 const smtpPodLabels = config.getObject<Record<string, string>>("smtpSourcePodLabels");
 if (!!smtpNamespace !== !!smtpPodLabels || (smtpPodLabels && Object.keys(smtpPodLabels).length === 0)) {

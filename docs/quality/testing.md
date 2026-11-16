@@ -20,7 +20,6 @@ These commands follow workspace manifests; a command entry does not assert test 
 | `pnpm --dir web e2e:offline` | Offline, stream, and visual browser fixtures. | Production web assets and Playwright browser binaries. |
 | `pnpm --dir web e2e:integration` | Browser tests against the integration preview. | Production web assets, Playwright browsers, and isolated dependencies as each test requires. |
 | `bun run --cwd infra/pulumi build` | Pulumi TypeScript check without an apply. | Installed infrastructure dependencies. |
-| `bun run --cwd infra/pulumi test` | Local infrastructure policy tests without an apply. | Bun and installed infrastructure dependencies. |
 
 Check that test files and Playwright configuration exist before test execution.
 Report absent coverage or configuration as a gap, not a pass.

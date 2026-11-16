@@ -3,8 +3,7 @@
   "private": true,
   "main": "index.ts",
   "scripts": {
-    "build": "tsc --noEmit",
-    "test": "bun test"
+    "build": "tsc --noEmit"
   },
   "dependencies": {
     "@pulumi/authentik": "git+https://git.holdenitdown.net/rfhold/authentik-provider-sdk.git#5ea9e48d7fb3efe716edc3a863bfa0118abc26e2",

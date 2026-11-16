@@ -47,8 +47,8 @@ Names below use the `inbox:` config namespace.
 
 Without the preview exception, the Pulumi program rejects absent NATS credentials.
 It always rejects partial username/password pairs and simultaneous credential methods.
-The preview stack opts into anonymous shared NATS with `allowAnonymousNats: true`.
-This opt-in rejects any NATS credentials; production and other stacks reject the opt-in itself.
+Both stack declarations disable anonymous NATS.
+The preview-only escape hatch rejects credentials; production and other stacks reject the escape hatch itself.
 Production requires exactly one complete credential method and fails infrastructure validation without it.
 This exception changes only broker authentication; application OIDC remains mandatory.
 The stack files also declare resource identities, storage settings, and OAuth wrapping-key versions.
@@ -67,8 +67,16 @@ The hosted runtime receives these NATS settings:
 | `INBOX_NATS_USER` and `INBOX_NATS_PASSWORD` | Secret pair, only with username/password authentication. |
 | `INBOX_NATS_CREDENTIALS_FILE` | `/var/run/secrets/inbox/nats/nats.creds`, only with file credentials. |
 
-Anonymous preview emits no NATS authentication variables, credentials Secret, or credentials-file mount.
-It retains the explicit `INBOX_PREVIEW` namespace and three JetStream replicas.
+An explicit development override for anonymous preview emits no NATS authentication variables or credential mount.
+Normal preview and production require credentials.
+
+The deployment process can supply credential contents through `PULUMI_NATS_CREDENTIALS`.
+Pulumi captures the secret environment input in a `pulumi.Stash` and validates the resolved Stash output.
+Later applies can use the retained output without the environment variable.
+An empty or malformed resolved output fails closed.
+The environment input and `inbox:natsCredentials` are mutually exclusive.
+Do not pass credential contents through command arguments, task Results, or shared workspaces.
+Pulumi child processes can inherit this environment value; process-environment inspection remains privileged.
 
 ## Identity-provider constraint
 
@@ -123,10 +131,27 @@ Hosted Inbox uses the shared homelab NATS service, not a broker per environment.
 The application creates its required JetStream resources at runtime under an explicit environment prefix.
 Every stream, subject, object store, durable consumer, cursor generation, and outbox publication target uses its environment prefix.
 These prefixes prevent accidental collisions, not malicious cross-application access.
-Anonymous preview accepts the risk that other clients with broker access can read, publish, or alter its NATS resources.
 Application OIDC does not protect direct broker access.
-Production requires credentials and broker ACLs that enforce its environment boundary.
-Broker changes, per-application account migrations, and Walter migrations remain deferred and require separate approval.
+Each hosted environment requires its own repository/environment NATS account.
+Account isolation protects subjects and JetStream resources across environments.
+The service user needs JetStream management, reply inboxes, acknowledgements, and object-store subjects within its account.
+A prefix-only subject ACL does not cover that workflow.
+
+Homelab's NATS program owns operator and account identities, quotas, and credential generations.
+Its Tekton program exposes application credentials through repository/environment-scoped OpenBao paths.
+The deployment Task enables `nats-enabled` and selects `nats-repository: rfhold/inbox`.
+It retains the current shared CI namespace, ServiceAccount, and deployment credentials.
+Its short-lived OpenBao session reads only that environment's credentials into memory.
+The Task supplies the contents through `PULUMI_NATS_CREDENTIALS` only to the Pulumi subprocess.
+Inbox supplies a secret Stash input and consumes the secret resolved output; deployment code needs no credential file reader.
+Consumer Task imports require an approved immutable Homelab commit.
+The current pipeline pins require a separate update after platform publication.
+NATS account separation does not isolate trusted CI jobs from each other.
+
+Broker activation and account migration require a coordinated deployment approval.
+The operator account model does not automatically adopt anonymous-account streams.
+Preview data deletion requires exact targets and separate destructive authority.
+Walter cleanup remains outside this change.
 
 The [command contract](../architecture/spec/commands.md) retains strict durability, retention, capacity, and no-fallback requirements.
 Environment isolation never relaxes pending-payload protection, outbox recovery, or durable result confirmation.

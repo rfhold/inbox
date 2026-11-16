@@ -1,5 +1,14 @@
 const segment = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+export function validateNatsCredentials(value: string): string {
+  if (Buffer.byteLength(value) > 16_384 || /\x00/.test(value) ||
+      !/-----BEGIN NATS USER JWT-----\s+[A-Za-z0-9_.-]+\s+------END NATS USER JWT------/.test(value) ||
+      !/-----BEGIN USER NKEY SEED-----\s+SU[A-Z2-7]+\s+------END USER NKEY SEED------/.test(value)) {
+    throw new Error("Invalid NATS credentials");
+  }
+  return value;
+}
+
 export function natsAuthenticationEnv<T>(
   stack: string, allowAnonymous = false, user?: T, password?: T, credentials?: T,
 ): Record<string, T | string> {
