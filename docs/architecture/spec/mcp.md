@@ -34,14 +34,19 @@ The [email-domain contract](domains.md) governs names, policy, and mailbox domai
 | `waltr://domains` | Paginated domain directory; the template is `waltr://domains{?limit,cursor}`. |
 | `waltr://domains/{domain_id}` | Domain identity and independent receive/send policy. |
 | `waltr://mailboxes` | Paginated mailbox directory. |
-| `waltr://mailboxes/{mailbox_id}` | Mailbox identity and links to Inbox and Sent collections. |
-| `waltr://mailboxes/{mailbox_id}/inbox` | Paginated Inbox entry summaries. |
-| `waltr://mailboxes/{mailbox_id}/sent` | Paginated Sent entry summaries. |
-| `waltr://mailboxes/{mailbox_id}/entries/{entry_id}` | Plain-text message view, metadata, and entry read state. |
-| `waltr://mailboxes/{mailbox_id}/entries/{entry_id}/body/{offset}` | Plain-text body continuation at a UTF-8 byte offset. |
+| `waltr://mailboxes/{mailbox_address}` | Mailbox identity and links to Inbox and Sent collections. |
+| `waltr://mailboxes/{mailbox_address}/inbox` | Paginated Inbox entry summaries. |
+| `waltr://mailboxes/{mailbox_address}/sent` | Paginated Sent entry summaries. |
+| `waltr://mailboxes/{mailbox_address}/entries/{entry_id}` | Plain-text message view, metadata, and entry read state. |
+| `waltr://mailboxes/{mailbox_address}/entries/{entry_id}/body/{offset}` | Plain-text body continuation at a UTF-8 byte offset. |
 | `waltr://submissions/{submission_id}` | Durable submission state and recipient delivery outcomes. |
 
-URIs use the exact lowercase `waltr://` scheme and canonical lowercase, hyphenated UUIDs.
+URIs use the exact lowercase `waltr://` scheme.
+Mailbox identifiers and mailbox JSON `id` values use normalized lowercase email addresses, including literal `@` and `+`.
+Domain, entry, and submission identifiers remain canonical lowercase, hyphenated UUIDs.
+UUID mailbox URIs are invalid; no compatibility aliases exist.
+Address lookup requires the current owner before any mailbox, entry, mutation, or event access.
+Internal database identities, RPC mailbox IDs, durable commands, and opaque cursors retain UUIDs.
 The parser rejects aliases, trailing slashes, fragments, percent escapes, and unknown paths.
 URIs contain ASCII characters only and cannot exceed 4,096 bytes.
 An entry resource belongs to its mailbox; a cross-mailbox entry reference fails validation.
@@ -191,7 +196,7 @@ The event input selects one Inbox resource:
 
 ```json
 {
-  "inbox": "waltr://mailboxes/00000000-0000-4000-8000-000000000001/inbox"
+  "inbox": "waltr://mailboxes/synthetic@inbox.test/inbox"
 }
 ```
 
@@ -203,13 +208,15 @@ Each event payload contains only these resource references:
 
 ```json
 {
-  "inbox": "waltr://mailboxes/00000000-0000-4000-8000-000000000001/inbox",
-  "message": "waltr://mailboxes/00000000-0000-4000-8000-000000000001/entries/00000000-0000-4000-8000-000000000002"
+  "inbox": "waltr://mailboxes/synthetic@inbox.test/inbox",
+  "message": "waltr://mailboxes/synthetic@inbox.test/entries/00000000-0000-4000-8000-000000000002"
 }
 ```
 
 The event envelope carries the stable entry UUID as `eventId`, a timestamp, and cursor metadata.
-Events never contain a subject, body, or address.
+Events never contain a subject, body, or recipient list.
+Their canonical resource URIs include the selected mailbox's email address.
+Treat those URIs as private account data and exclude them from telemetry.
 Clients fetch the entry resource after an event.
 Resource update notifications serve as refresh hints, not agent wakeups.
 The adapter has no custom Inbox watch-binding tool.

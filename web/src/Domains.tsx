@@ -34,7 +34,7 @@ export function Domains(props: Access & {domains: Domain[]; online: boolean; ref
     } catch (error) {if (definitiveRejection(error)) {await commands.remove('createDomain', request.requestId); setIntent(undefined);} props.fail(error);}
     finally {setBusy(false);}
   }
-  return <details class="domains"><summary>Domains</summary>
+  return <section class="domains" aria-label="Domain management">
     <p class="muted">Local delivery only. Names cannot be renamed or deleted. Receive and send policies are independent; mail stays readable.</p>
     <For each={props.domains.map(domain => domain.id)}>{id => <Show when={props.administrator} fallback={<p>{props.domains.find(domain => domain.id === id)!.name}</p>}><DomainPolicy domain={props.domains.find(domain => domain.id === id)!} online={props.online} refresh={props.refresh} fail={props.fail} client={client} commands={commands} /></Show>}</For>
     <Show when={props.administrator}><form class="domain-create" onSubmit={createDomain}>
@@ -46,7 +46,7 @@ export function Domains(props: Access & {domains: Domain[]; online: boolean; ref
       <Show when={intent()}><p class="warning">Creation unconfirmed. Retry the same request before changing it. Keep this window open.</p></Show>
       <button disabled={!ready() || !props.online || busy()}>{intent() ? 'Retry domain creation safely' : 'Create domain'}</button>
     </form></Show>
-  </details>;
+  </section>;
 }
 function DomainPolicy(props: Omit<Access, 'administrator'> & {domain: Domain; online: boolean; refresh: () => Promise<unknown>; fail: (error: unknown) => void}) {
   const {client, commands} = props;

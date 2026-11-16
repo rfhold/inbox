@@ -3,7 +3,7 @@ use axum::{
     extract::{Request, State},
     middleware,
     response::Response,
-    routing::get,
+    routing::{get, get_service},
 };
 use inbox_server::{pb::mail_service_server::MailServiceServer, service::MailService, telemetry};
 use std::{env, sync::Arc, time::Duration};
@@ -118,6 +118,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .merge(grpc)
         .merge(mcp)
         .merge(auth.router())
+        .route(
+            "/domains",
+            get_service(ServeFile::new(format!("{web}/index.html"))),
+        )
+        .route(
+            "/mail/{*path}",
+            get_service(ServeFile::new(format!("{web}/index.html"))),
+        )
         .fallback_service(
             ServeDir::new(&web).not_found_service(ServeFile::new(format!("{web}/index.html"))),
         )

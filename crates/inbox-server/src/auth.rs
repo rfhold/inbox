@@ -2085,7 +2085,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            directory.raw.to_string().contains(&mailbox.id),
+            directory.raw.to_string().contains(&mailbox.address),
             "hosted principal resolves the same browser/native internal owner"
         );
         let mut events = mcp
@@ -2094,7 +2094,7 @@ mod tests {
                     name: "mail.received".into(),
                     arguments: Some(
                         serde_json::from_value(
-                            json!({"inbox":format!("waltr://mailboxes/{}/inbox",mailbox.id)}),
+                            json!({"inbox":format!("waltr://mailboxes/{}/inbox",mailbox.address)}),
                         )
                         .unwrap(),
                     ),
@@ -2188,7 +2188,7 @@ mod tests {
                     name: "mail.received".into(),
                     arguments: Some(
                         serde_json::from_value(
-                            json!({"inbox":format!("waltr://mailboxes/{}/inbox",mailbox.id)}),
+                            json!({"inbox":format!("waltr://mailboxes/{}/inbox",mailbox.address)}),
                         )
                         .unwrap(),
                     ),

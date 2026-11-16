@@ -1,11 +1,26 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { cached, clearMail, confirmDraft, drafts, jobs, newDraft } from './storage';
+import { cached, clearMail, confirmDraft, drafts, jobs, newDraft, createStorage } from './storage';
 beforeAll(() => {
   vi.stubGlobal('location', {origin: 'http://localhost:8080'});
   vi.stubGlobal('navigator', {onLine: true});
 });
 describe('durable local state', () => {
+  it('persists dismissals per account without removing delivery jobs or drafts', async () => {
+    const first = createStorage(() => 'notifications-first');
+    const second = createStorage(() => 'notifications-second');
+    const job = {id: 'job', status: 1};
+    await first.jobs.save(job);
+    await first.notifications.dismiss(['job-pending']);
+    expect(await first.notifications.dismissed()).toEqual(['job-pending']);
+    expect(await second.notifications.dismissed()).toEqual([]);
+    expect(await first.jobs.all()).toContainEqual(job);
+    await first.clearMail();
+    expect(await first.notifications.dismissed()).toEqual(['job-pending']);
+    await first.notifications.dismiss(Array.from({length: 110}, (_, i) => String(i)));
+    expect(await first.notifications.dismissed()).toHaveLength(100);
+    first.close(); second.close();
+  });
   it('keeps draft identity and uncertain submission key across reads', async () => {
     const draft = {...newDraft('sender'), subject: 'synthetic draft', locked: true};
     await drafts.save(draft);

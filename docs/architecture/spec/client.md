@@ -1,5 +1,26 @@
 # Client and privacy contract
 
+## Navigation and notifications
+
+Solid Router owns mailbox selection at `/mail/EMAIL/inbox`, `/mail/EMAIL/sent`, and `/mail/EMAIL/drafts`.
+An optional final entry or draft UUID selects the detail pane.
+Reloads and browser history preserve the URL's mailbox and folder; UUID mailbox aliases do not exist.
+Mailbox addresses resolve only against the authenticated account's directory.
+Unknown addresses never select another mailbox as a fallback.
+The root URL selects the first available mailbox.
+Domain management has its own `/domains` page.
+The server and service worker serve the application shell for these navigation routes.
+The shell contains no mail; private offline records remain account-scoped.
+
+Delivery jobs continue to reconcile independently of their presentation.
+New delivery states produce dismissible toasts and appear in a notification center, not a Delivery sidebar section.
+Notification dismissal persists on the device for that account and never removes a job or draft.
+A changed delivery state produces a new notification even after dismissal of its earlier state.
+Failure toasts remain until dismissal; other delivery toasts expire after eight seconds.
+The center retains at most the latest 100 job notifications.
+Draft navigation waits for local persistence; failed persistence must not discard an unsaved draft.
+Mailbox email paths and entry IDs must not enter telemetry or error context.
+
 ## Browser transport and display
 
 Rust serves production assets and RPC endpoints from one origin.

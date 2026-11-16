@@ -6,13 +6,13 @@ import type { Account } from './session';
 import { watchChanges, affectedQuery, type SyncState, type WatchControl } from './changes';
 import { mailReconciler } from './reconcile';
 import { safeEvent } from './telemetry';
-import { SubmissionStatus } from './gen/inbox/v1/inbox_pb';
 import { Icon } from './Icon';
 import { Domains } from './Domains';
 import { commandIntent, definitiveRejection, sendRejected, type Intent } from './intents';
+import { useLocation, useNavigate, useBeforeLeave } from '@solidjs/router';
+import { mailPath, readRoute, type MailFolder } from './routes';
+import { Notifications } from './Notifications';
 
-const statusName = (status: number) => ['Unknown', 'Pending delivery', 'Delivered', 'Partially failed', 'Failed'][status] || 'Unknown';
-const recipientName = (status: number) => ['Unknown', 'Pending', 'Delivered', 'Failed'][status] || 'Unknown';
 const localJob = (submission: {id: string; status: number; recipients: {address: string; status: number; errorCode: string}[]}): Job => ({id: submission.id, status: submission.status, recipients: submission.recipients.map(({address, status, errorCode}) => ({address, status, errorCode}))});
 const initials = (address: string) => address.slice(0, 1).toUpperCase() || '?';
 const displaySender = (address: string) => address.split('@')[0] || address;
@@ -30,12 +30,27 @@ export default function App(props: {account: Account; logout: () => void}) {
   const qc = useQueryClient();
   const [online, setOnline] = createSignal(navigator.onLine);
   const [sync, setSync] = createSignal<SyncState>(navigator.onLine ? 'reconnecting' : 'offline');
-  const [box, setBox] = createSignal('');
-  const [folder, setFolder] = createSignal(Folder.INBOX);
-  const [entry, setEntry] = createSignal('');
+  const location = useLocation();
+  const routerNavigate = useNavigate();
+  let internalNavigation = false;
+  const navigate = (to: string, options?: {replace?: boolean}) => {
+    internalNavigation = true;
+    try {routerNavigate(to, options);} finally {internalNavigation = false;}
+  };
+  const route = () => readRoute(location.pathname);
+  const mailRoute = () => {const value = route(); return value.page === 'mail' ? value : undefined;};
+  const [lastAddress, setLastAddress] = createSignal('');
+  const navigationAddress = () => mailRoute()?.address || lastAddress() || allBoxes()[0]?.address;
+  createEffect(() => {const selected = mailRoute(); if (selected) setLastAddress(selected.address);});
+  const box = () => allBoxes().find(value => value.address === mailRoute()?.address)?.id ?? '';
+  const folder = () => mailRoute()?.folder === 'sent' ? Folder.SENT : Folder.INBOX;
+  const entry = () => mailRoute()?.folder === 'drafts' ? '' : mailRoute()?.entry ?? '';
+  const setEntry = (id: string) => {const selected = mailRoute(); if (selected) navigate(mailPath(selected.address, selected.folder, id || undefined));};
+  const setBox = (id: string) => {const selected = allBoxes().find(value => value.id === id); if (selected) navigate(mailPath(selected.address));};
   const [draft, setDraft] = createSignal<Draft>();
   const [savedDrafts, setSavedDrafts] = createSignal<Draft[]>([]);
   const [savedJobs, setSavedJobs] = createSignal<Job[]>([]);
+  const [jobsReady, setJobsReady] = createSignal(false);
   const [saved, setSaved] = createSignal(true);
   const [notice, setNotice] = createSignal('');
   const [busy, setBusy] = createSignal(false);
@@ -46,7 +61,8 @@ export default function App(props: {account: Account; logout: () => void}) {
   const [createIntent, setCreateIntent] = createSignal<Intent<{localPart: string; name: string; domainId: string}>>();
   const [createUnconfirmed, setCreateUnconfirmed] = createSignal(false);
   const [commandsReady, setCommandsReady] = createSignal(false);
-  const [showDrafts, setShowDrafts] = createSignal(false);
+  const showDrafts = () => mailRoute()?.folder === 'drafts';
+  const setShowDrafts = (value: boolean) => {const address = navigationAddress(); if (address && value !== showDrafts()) navigate(mailPath(address, value ? 'drafts' : 'inbox'));};
   const [pane, setPane] = createSignal<'list' | 'detail'>('list');
   let timer: ReturnType<typeof setTimeout> | undefined;
   let writeQueue = Promise.resolve();
@@ -60,13 +76,34 @@ export default function App(props: {account: Account; logout: () => void}) {
   };
   const flush = () => { clearTimeout(timer); const value = draft(); return value ? persist(value) : writeQueue; };
   const loadDrafts = async () => setSavedDrafts(await drafts.all());
-  const loadJobs = async () => setSavedJobs(await jobs.all());
+  const loadJobs = async () => {setSavedJobs(await jobs.all()); setJobsReady(true);};
   const fail = (_error: unknown) => {if (props.account.signal.aborted) return; setNotice('Request could not be completed. Reconnect or retry safely.'); safeEvent('application_error');};
   const boxes = createInfiniteQuery(() => ({queryKey: ['boxes'], initialPageParam: '', queryFn: ({pageParam, signal}) => mailboxes(pageParam, signal), getNextPageParam: last => last.nextPageToken || undefined}));
   const domainList = createQuery(() => ({queryKey: ['domains'], queryFn: ({signal}) => allDomains(signal)}));
   createEffect(() => {if (!domainId() && domainList.data?.length) setDomainId(domainList.data.at(-1)!.id);});
   const allBoxes = () => boxes.data?.pages.flatMap(p => p.mailboxes) ?? [];
-  createEffect(() => {if (!box() && allBoxes().length) setBox(allBoxes()[0].id);});
+  createEffect(() => {
+    if (route().page === 'home' && allBoxes().length) navigate(mailPath(allBoxes()[0].address), {replace: true});
+    if (mailRoute() && !box() && boxes.hasNextPage && !boxes.isFetchingNextPage) void boxes.fetchNextPage();
+  });
+  useBeforeLeave(event => {
+    if (busy() && !internalNavigation) {event.preventDefault(); return;}
+    const value = draft();
+    if (value && !saved()) {
+      event.preventDefault();
+      void flush().then(() => {if (saved()) event.retry(true);});
+    }
+  });
+  createEffect(() => {
+    const selected = mailRoute();
+    if (selected?.folder === 'drafts' && selected.entry) {
+      const value = savedDrafts().find(value => value.id === selected.entry && value.from === box());
+      if (value && draft()?.id !== value.id) {setDraft(value); setSaved(true); setPane('detail');}
+    } else {
+      setDraft(undefined);
+      setPane(selected?.entry ? 'detail' : 'list');
+    }
+  });
   const list = createInfiniteQuery(() => ({queryKey: ['messages', box(), folder()], enabled: !!box(), initialPageParam: '', queryFn: ({pageParam, signal}) => messages(box(), folder(), pageParam, signal), getNextPageParam: last => last.nextPageToken || undefined}));
   const detail = createQuery(() => ({queryKey: ['detail', box(), entry()], enabled: !!box() && !!entry(), queryFn: ({signal}) => message(box(), entry(), signal)}));
   const activeBox = () => allBoxes().find(b => b.id === box());
@@ -107,11 +144,14 @@ export default function App(props: {account: Account; logout: () => void}) {
   async function openDraft(value: Draft) {
     if (busy()) return;
     await flush();
+    if (!saved()) return;
     const stored = (await drafts.all()).find(saved => saved.id === value.id);
     const current = draft();
     const selected = current?.id === value.id ? current : stored;
     if (!selected) return;
-    setDraft(selected); setSaved(JSON.stringify(selected) === JSON.stringify(stored)); setEntry(''); setShowDrafts(true); setPane('detail');
+    const mailbox = allBoxes().find(box => box.id === selected.from);
+    if (!mailbox) {setNotice('Load the sender mailbox before opening this draft.'); return;}
+    setDraft(selected); setSaved(JSON.stringify(selected) === JSON.stringify(stored)); navigate(mailPath(mailbox.address, 'drafts', selected.id)); setPane('detail');
   }
   function edit(field: keyof Draft, value: string) {
     const current = draft(); if (!current || current.locked) return;
@@ -139,7 +179,7 @@ export default function App(props: {account: Account; logout: () => void}) {
       await confirmDraft(locked, localJob(result.submission));
       watch?.refreshJobs();
       setDraft(undefined); setShowDrafts(false); setPane('list'); await loadDrafts(); await loadJobs(); void refresh();
-      setNotice('Message accepted. Check Delivery for its status.'); safeEvent('message_submitted');
+      setNotice('Message accepted. Delivery updates appear in notifications.'); safeEvent('message_submitted');
     } catch (error) {
       if (sendRejected(error)) {
         const rejected = {...locked, rejected: true};
@@ -159,7 +199,7 @@ export default function App(props: {account: Account; logout: () => void}) {
       const result = await client.createMailbox(request);
       if (!result.mailbox) throw new Error('Mailbox creation unconfirmed. Retry the same request.');
       await commands.remove('createMailbox', request.requestId); setCreateIntent(undefined); setCreateUnconfirmed(false); lastCreateIntent = undefined;
-      await qc.invalidateQueries({queryKey: ['boxes']}); setBox(result.mailbox.id); setCreating(false); setLocalPart(''); setName('');
+      await qc.invalidateQueries({queryKey: ['boxes']}); navigate(mailPath(result.mailbox.address)); setCreating(false); setLocalPart(''); setName('');
     } catch(error) {
       if (definitiveRejection(error)) {await commands.remove('createMailbox', request.requestId); setCreateIntent(undefined); setCreateUnconfirmed(false);}
       else setCreateUnconfirmed(true);
@@ -175,11 +215,11 @@ export default function App(props: {account: Account; logout: () => void}) {
   async function download() {
     try {const result = await client.getRawMessage({mailboxId: box(), entryId: entry()}, {timeoutMs: 30000}); const url = URL.createObjectURL(new Blob([new Uint8Array(result.rawMessage)], {type: 'message/rfc822'})); const link = document.createElement('a'); link.href = url; link.download = 'message.eml'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);} catch(error) {fail(error);}
   }
-  async function selectBox(id: string) {if (busy()) return; await flush(); setBox(id); setEntry(''); setDraft(undefined); setShowDrafts(false); setPane('list');}
-  async function selectFolder(next?: Folder) {if (busy()) return; await flush(); setDraft(undefined); setEntry(''); setShowDrafts(next === undefined); if (next !== undefined) setFolder(next); setPane('list');}
+   async function selectBox(id: string) {if (busy()) return; await flush(); if (!saved()) return; setBox(id);}
+   async function selectFolder(next?: Folder) {if (busy()) return; await flush(); if (!saved()) return; const address = navigationAddress(); if (address) navigate(mailPath(address, next === undefined ? 'drafts' : next === Folder.SENT ? 'sent' : 'inbox'));}
   return <div class="app">
     <header class="top"><div class="brand"><span class="brand-mark"><Icon name="mail" /></span><h1>Inbox</h1><span class="workspace-label">{props.account.identity.mode === 'disabled' ? 'Shared workspace' : 'Personal workspace'}</span></div><div class="top-actions"><span class="connection" role="note" aria-live="polite" aria-label="Mail synchronization" classList={{offline: !online() || sync() !== 'current'}}><span class="connection-dot" /><span>{!online() ? 'Offline · cached mail may be stale' : sync() === 'current' ? 'Up to date' : sync() === 'syncing' ? 'Syncing · cached mail may be stale' : 'Reconnecting · cached mail may be stale'}</span></span><button class="refresh" onClick={() => void refresh()}><Icon name="refresh" /><span>Refresh</span></button><Show when={props.account.identity.mode === 'oidc'}><button onClick={props.logout}>Sign out</button></Show></div></header>
-    <Show when={notice()}><div role="status" class="notice">{notice()}<button aria-label="Dismiss notification" onClick={() => setNotice('')}>Dismiss</button></div></Show>
+    <Show when={notice()}><div role="status" class="notice toast">{notice()}<button aria-label="Dismiss notification" onClick={() => setNotice('')}>Dismiss</button></div></Show>
     <div class="workspace" classList={{'show-detail': pane() === 'detail'}}>
       <aside class="sidebar" aria-label="Mail navigation">
         <div class="account"><div class="section-head"><label for="mailbox-selector">Mailbox</label><button class="icon-button" aria-label="Create mailbox" aria-expanded={creating()} onClick={() => setCreating(!creating())}><Icon name="plus" /></button></div>
@@ -189,29 +229,31 @@ export default function App(props: {account: Account; logout: () => void}) {
         <button class="primary compose" onClick={() => void compose()} disabled={!box() || busy()}><Icon name="compose" />Compose</button>
         <Show when={creating()}><form class="mailbox-form" onSubmit={createBox}><fieldset disabled={!commandsReady() || !!createIntent() || busy()}><label>Name<input required value={name()} onInput={e => setName(e.currentTarget.value)} /></label><label>Address local part<input required pattern="[a-zA-Z0-9._+-]+" value={localPart()} onInput={e => setLocalPart(e.currentTarget.value)} placeholder="alex" /></label><label>Mailbox domain<select required value={domainId()} onChange={e => setDomainId(e.currentTarget.value)}><Show when={!domainList.data?.some(domain => domain.id === domainId())}><option value={domainId()}>{domainId() ? 'Saved domain' : 'Select a domain'}</option></Show><For each={domainList.data}>{domain => <option value={domain.id}>{domain.name}</option>}</For></select></label></fieldset><Show when={createUnconfirmed()}><p class="warning">Creation unconfirmed. Retry the original mailbox and domain before changing it.</p></Show><button disabled={!online() || busy() || !commandsReady() || (!createIntent() && (!domainId() || domainList.isPending || !!domainList.error))}>{createUnconfirmed() ? 'Retry mailbox creation safely' : 'Create'}</button></form></Show>
         <Show when={domainList.error}><p role="alert">Domain directory unavailable. Connect and try again.</p></Show>
-        <Domains domains={domainList.data ?? []} online={online()} refresh={refreshDomains} fail={fail} administrator={props.account.identity.administrator} client={client} commands={commands} />
+         <button aria-current={route().page === 'domains' ? 'page' : undefined} onClick={async () => {if (busy()) return; await flush(); if (saved()) navigate('/domains');}}>Domains</button>
         <Show when={boxes.error}><p role="alert">Mailboxes unavailable. Connect and try again.</p></Show>
         <Show when={!boxes.isPending && !allBoxes().length}><p class="muted">Create a mailbox to get started.</p></Show>
         <nav class="folders" aria-label="Folders"><button classList={{selected: !showDrafts() && folder() === Folder.INBOX}} aria-current={!showDrafts() && folder() === Folder.INBOX ? 'page' : undefined} onClick={() => void selectFolder(Folder.INBOX)}><Icon name="inbox" />Inbox</button><button classList={{selected: !showDrafts() && folder() === Folder.SENT}} aria-current={!showDrafts() && folder() === Folder.SENT ? 'page' : undefined} onClick={() => void selectFolder(Folder.SENT)}><Icon name="sent" />Sent</button><button classList={{selected: showDrafts()}} aria-current={showDrafts() ? 'page' : undefined} onClick={() => void selectFolder()}><Icon name="draft" />Drafts <span class="count">{savedDrafts().length}</span></button></nav>
-        <div class="sidebar-bottom"><Show when={savedJobs().length}><details class="delivery"><summary>Delivery <span class="count">{savedJobs().filter(job => job.status === SubmissionStatus.PENDING).length || ''}</span></summary><div class="delivery-list"><For each={savedJobs().slice(-10).reverse()}>{job => <details class="job"><summary>{statusName(job.status)}</summary><For each={job.recipients}>{recipient => <p>{recipient.address}<br /><small>{recipientName(recipient.status)}{recipient.errorCode ? ` · ${recipient.errorCode}` : ''}</small></p>}</For></details>}</For></div></details></Show>
+         <div class="sidebar-bottom"><Notifications jobs={savedJobs()} loaded={jobsReady()} store={storage.notifications} fail={fail} />
           <details class="privacy"><summary>Device storage</summary><p>{props.account.identity.mode === 'disabled' ? 'Shared mail. No account required.' : 'Mail and drafts are isolated to your account.'}<br />Drafts stay on this device.</p><button onClick={async () => {await clearMail(); setEntry(''); await qc.resetQueries(); setNotice('Cached mail cleared. Local drafts preserved.');}}>Clear cached mail</button></details>
           <span class="shared-note">{props.account.identity.mode === 'disabled' ? 'Shared mail' : 'Personal mail'} · local drafts</span>
         </div>
       </aside>
+      <Show when={route().page === 'domains'} fallback={<Show when={route().page !== 'missing'} fallback={<main class="welcome"><h2>Page not found</h2></main>}>
       <section class="message-list" aria-label="Message list"><div class="list-heading"><h2>{showDrafts() ? 'Drafts' : folder() === Folder.SENT ? 'Sent' : 'Inbox'}</h2><span>{showDrafts() ? 'Saved on this device' : activeBox()?.name || activeBox()?.address || 'Your messages'}</span></div><div class="list-scroll">
+        <Show when={mailRoute() && !box() && !boxes.isPending && !boxes.hasNextPage}><p role="alert" class="empty">Mailbox unavailable for this account.</p></Show>
         <Show when={showDrafts()} fallback={<>
         <Show when={list.isPending && box()}><p class="empty">Loading messages…</p></Show><Show when={list.error}><p role="alert" class="empty">Messages unavailable. Connect to load this view.</p></Show>
-        <For each={list.data?.pages.flatMap(p => p.entries)}>{item => <button class="message-row" classList={{selected: entry() === item.id, unread: !item.isRead}} onClick={async () => {if (busy()) return; await flush(); setDraft(undefined); setEntry(item.id); setPane('detail');}}><span class="avatar">{initials(folder() === Folder.SENT ? item.to[0] || '' : item.fromAddress)}</span><span class="row-content"><span class="row-meta"><span class="sender">{folder() === Folder.SENT ? `To: ${item.to.map(displaySender).join(', ')}` : displaySender(item.fromAddress)}</span><time dateTime={item.createdAt}>{friendlyDate(item.createdAt)}</time></span><strong>{item.subject || '(No subject)'}</strong><span class="preview">{item.preview || 'No preview'}</span><small class="read-state">{item.isRead ? 'Read' : 'Unread'}</small></span></button>}</For>
+         <For each={list.data?.pages.flatMap(p => p.entries)}>{item => <button class="message-row" classList={{selected: entry() === item.id, unread: !item.isRead}} onClick={async () => {if (busy()) return; await flush(); if (!saved()) return; setDraft(undefined); setEntry(item.id); setPane('detail');}}><span class="avatar">{initials(folder() === Folder.SENT ? item.to[0] || '' : item.fromAddress)}</span><span class="row-content"><span class="row-meta"><span class="sender">{folder() === Folder.SENT ? `To: ${item.to.map(displaySender).join(', ')}` : displaySender(item.fromAddress)}</span><time dateTime={item.createdAt}>{friendlyDate(item.createdAt)}</time></span><strong>{item.subject || '(No subject)'}</strong><span class="preview">{item.preview || 'No preview'}</span><small class="read-state">{item.isRead ? 'Read' : 'Unread'}</small></span></button>}</For>
         <Show when={box() && list.data?.pages[0].entries.length === 0}><p class="empty">Nothing here yet.</p></Show><Show when={list.hasNextPage}><button class="more" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>Load more messages</button></Show>
         </>}><For each={savedDrafts()}>{value => <button class="draft-link" classList={{selected: draft()?.id === value.id}} onClick={() => void openDraft(value)}><span class="avatar draft-avatar"><Icon name="draft" /></span><span class="row-content"><span class="row-meta"><span class="sender">{value.to ? `To: ${value.to}` : 'No recipients'}</span><small>Draft</small></span><strong>{value.subject || 'Untitled draft'}</strong><span class="preview">{value.body || 'No message yet'}</span><small classList={{'draft-warning': !!value.locked}}>{value.rejected ? 'Rejected · correction available' : value.locked ? 'Unconfirmed · safe retry' : 'Saved on this device'}</small></span></button>}</For><Show when={!savedDrafts().length}><div class="empty"><Icon name="draft" /><p>No local drafts.</p><small>Your drafts are saved only on this device.</small></div></Show></Show>
         </div></section>
       <main class="detail" aria-label="Reading pane">
-        <button class="mobile-back" onClick={() => setPane('list')}><Icon name="back" />Back to {showDrafts() ? 'drafts' : 'messages'}</button>
+         <button class="mobile-back" onClick={async () => {await flush(); if (saved()) setEntry('');}}><Icon name="back" />Back to {showDrafts() ? 'drafts' : 'messages'}</button>
         <Show when={draft()} fallback={<Show when={entry()} fallback={<div class="welcome"><span class="welcome-icon"><Icon name="mail" /></span><h2>Select a message</h2><p>Choose a conversation to read, or compose a new message.</p><small>Plain-text mail.</small></div>}><Show when={detail.isPending}><p class="empty">Loading message…</p></Show><Show when={detail.error}><p role="alert" class="empty">Message unavailable. Connect to load this view.</p></Show><Show when={detail.data?.message}>{msg => <article>
           <div class="detail-actions"><div class="toolbar-group"><button onClick={() => void reply()}><Icon name="reply" />Reply</button></div><div class="toolbar-group"><button disabled={!online()} onClick={() => void mark(!msg().entry?.isRead)}><Icon name="read" />{msg().entry?.isRead ? 'Mark unread' : 'Mark read'}</button><button disabled={!online()} onClick={() => void download()}><Icon name="download" />Download EML</button></div></div>
           <div class="message-header"><h2>{msg().entry?.subject || '(No subject)'}</h2><div class="sender-line"><span class="avatar">{initials(msg().entry?.fromAddress || '')}</span><div><strong>{displaySender(msg().entry?.fromAddress || '')}</strong><span>{msg().entry?.fromAddress}</span></div><time dateTime={msg().entry?.sentAt || msg().entry?.createdAt}>{friendlyDate(msg().entry?.sentAt || msg().entry?.createdAt || '', true)}</time></div><dl><dt>To</dt><dd>{msg().entry?.to.join(', ')}</dd><Show when={msg().entry?.cc.length}><dt>Cc</dt><dd>{msg().entry?.cc.join(', ')}</dd></Show></dl></div><pre class="body">{msg().textBody || 'No plain-text content.'}</pre></article>}</Show></Show>}>
           {value => <form class="composer" onSubmit={send}>
-            <div class="composer-title"><h2>{value().replyEntry ? 'Reply' : 'New message'}</h2><button type="button" disabled={busy()} onClick={async () => {await flush(); setDraft(undefined); setPane('list');}}>Close</button></div>
+             <div class="composer-title"><h2>{value().replyEntry ? 'Reply' : 'New message'}</h2><button type="button" disabled={busy()} onClick={async () => {await flush(); if (!saved()) return; setDraft(undefined); setEntry(''); setPane('list');}}>Close</button></div>
             <p class="muted">{saved() ? 'Saved on this device' : 'Saving draft…'}</p>
             <Show when={value().locked}><p class="warning">{value().rejected ? 'The server rejected the entire submission. Copy it to a new draft to correct the recipients or content.' : 'Submission unconfirmed. This draft is locked to its original payload. Retry is safe, including after a reload.'}</p></Show>
             <fieldset disabled={value().locked || busy()}>
@@ -231,12 +273,15 @@ export default function App(props: {account: Account; logout: () => void}) {
                 const corrected = {...value(), id: crypto.randomUUID(), key: crypto.randomUUID(), locked: false, rejected: false};
                 await drafts.save(corrected); await loadDrafts(); await openDraft(corrected);
               }}>Copy to new draft</button></Show>
-               <Show when={!value().locked || value().rejected}><button type="button" disabled={busy()} onClick={async () => {clearTimeout(timer); await writeQueue; await drafts.remove(value().id); setDraft(undefined); setPane('list'); await loadDrafts();}}>Discard draft</button></Show>
+               <Show when={!value().locked || value().rejected}><button type="button" disabled={busy()} onClick={async () => {clearTimeout(timer); await writeQueue; await drafts.remove(value().id); setDraft(undefined); setEntry(''); setPane('list'); await loadDrafts();}}>Discard draft</button></Show>
               <Show when={!online()}><small>Connect to send. Your draft is safe.</small></Show>
             </div>
           </form>}
         </Show>
       </main>
+      </Show>}>
+        <main class="domains-page"><h2>Domains</h2><Show when={domainList.error}><p role="alert">Domain directory unavailable.</p></Show><Domains domains={domainList.data ?? []} online={online()} refresh={refreshDomains} fail={fail} administrator={props.account.identity.administrator} client={client} commands={commands} /></main>
+      </Show>
     </div>
   </div>;
 }

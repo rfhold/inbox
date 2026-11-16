@@ -61,13 +61,15 @@ await tools.opencode.watch_mcp_event({
   server: "inbox",
   event: "mail.received",
   arguments: {
-    inbox: "waltr://mailboxes/00000000-0000-4000-8000-000000000001/inbox",
+    inbox: "waltr://mailboxes/synthetic@inbox.test/inbox",
   },
   once: false,
 })
 ```
 
-Replace the synthetic mailbox UUID with a discovered mailbox identifier.
+Replace the synthetic address with a discovered mailbox address.
+This hard cutover rejects old UUID mailbox URIs, including persisted event-watch arguments.
+After deployment, stop recovery for the old watch before a new registration with the discovered address.
 `once: false` requests a continuous watch; the default `once: true` stops after one event.
 Native Events notifications wake the agent; resource update notifications only signal a refresh.
 No custom Inbox binding tool participates in this flow.

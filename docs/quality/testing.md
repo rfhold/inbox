@@ -19,6 +19,7 @@ These commands follow workspace manifests; a command entry does not assert test 
 | `pnpm web:e2e` | Playwright tests. | Test configuration, browser binaries, and an isolated local stack. |
 | `pnpm --dir web e2e:offline` | Offline, stream, and visual browser fixtures. | Production web assets and Playwright browser binaries. |
 | `pnpm --dir web e2e:integration` | Browser tests against the integration preview. | Production web assets, Playwright browsers, and isolated dependencies as each test requires. |
+| `pnpm --dir web exec playwright test --config playwright.ux.config.ts` | Email routes, history, drafts, offline deep links, and dismissible notification fixtures. | Installed dependencies and Playwright browser; starts a local production web preview with mocked mail RPCs. |
 | `bun run --cwd infra/pulumi build` | Pulumi TypeScript check without an apply. | Installed infrastructure dependencies. |
 
 Check that test files and Playwright configuration exist before test execution.
@@ -62,7 +63,7 @@ Observable restart tests do not replace deterministic commit-to-publication, pen
 | Offline recovery | Reconnect resumes the stream and resynchronizes before cache trust; invalidation never deletes or overwrites drafts. |
 | Stream privacy | Events contain only cursor metadata, kind, and applicable IDs; no content, addresses, or telemetry exports. |
 | MCP protocol | Same-origin `/mcp` uses generic Waltr `2026-07-28` transport; legacy initialization never succeeds through a fallback. |
-| MCP resources | Canonical URIs, `next` links, default limit 50/max 100, 32 KiB UTF-8 body chunks, and explicit 256 KiB resource failure. |
+| MCP resources | Email mailbox IDs and canonical URIs, UUID mailbox rejection, owner checks, `next` links, default limit 50/max 100, 32 KiB UTF-8 body chunks, and explicit 256 KiB resource failure. |
 | MCP pagination | Opaque cursors bind to the query; invalid, cross-mailbox, and cross-folder cursors fail explicitly. |
 | MCP mutations | Exact required fields, unknown-field rejection, byte/address limits, matching text/structured outcomes, resource links, and unchanged JetStream confirmation. |
 | MCP domain management | Exact domain projections, required fields, explicit canonical domain URIs, committed projections/resource links, bounds, and same-key uncertain retries. |
@@ -72,7 +73,7 @@ Observable restart tests do not replace deterministic commit-to-publication, pen
 | Arrival order | Concurrent delivery commits preserve mailbox order; restart preserves generation; a fresh watch starts at the current watermark. |
 | Arrival replay | Reconnect delivers at least once; malformed, cross-mailbox, future, different-generation, and gap cursors never lose events silently. |
 | Arrival bounds | Pages contain at most 100 arrivals; one-second idle tails, 15-second heartbeat checks, owned cancellation, and explicit slow-consumer failure. |
-| Events privacy | Event input selects an Inbox URI; payloads contain only Inbox/entry URIs, never a body, subject, or address. |
+| Events privacy | Event input selects an Inbox URI; payloads contain only Inbox/entry URIs, which include the selected mailbox email, never bodies, subjects, or recipient lists. These private URIs never enter telemetry. |
 | Events opt-in | The generic extension defaults off; explicit client opt-in enables `mail.received` without a custom Inbox binding tool. |
 | Events reset | `Active.truncated: true` signals a reset, not an internal page backlog; every supplied `maxAgeMs` value fails, including zero. |
 | OpenCode wake | A flag-enabled Events-capable runtime receives a native watch notification and actually wakes an agent session. |

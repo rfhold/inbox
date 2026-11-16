@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@grafana/faro-web-sdk', () => ({initializeFaro: vi.fn()}));
 vi.mock('@grafana/faro-web-tracing', () => ({TracingInstrumentation: vi.fn()}));
 import { collectorHeaders, rpcMethod, startTelemetry } from './telemetry';
+import { initializeFaro } from '@grafana/faro-web-sdk';
 describe('telemetry privacy boundary', () => {
   it('strips only the collector transport dedupe and propagation headers', () => {
     const source = new Headers({'Content-Type': 'application/json', 'Idempotency-Key': 'synthetic', traceparent: 'synthetic'});
@@ -27,5 +28,18 @@ describe('telemetry privacy boundary', () => {
   it('fails open when runtime config is unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {throw new Error('offline');}));
     await expect(startTelemetry()).resolves.toBeUndefined();
+  });
+  it('redacts mailbox email routes from telemetry metadata', async () => {
+    vi.stubGlobal('location', {origin: 'https://inbox.test', pathname: '/mail/private+tag@inbox.test/inbox'});
+    const fetcher = vi.fn(async () => ({json: async () => ({faro_url: 'https://collector.test/collect'})}));
+    vi.stubGlobal('fetch', fetcher);
+    vi.stubGlobal('window', {fetch: fetcher});
+    vi.mocked(initializeFaro).mockReturnValue({api: {pushEvent: vi.fn()}} as never);
+    await startTelemetry();
+    const config = vi.mocked(initializeFaro).mock.calls.at(-1)![0]!;
+    const item = {meta: {page: {url: location.pathname}, user: {id: 'private'}}};
+    const sanitized = config.beforeSend!(item as never);
+    expect(JSON.stringify(sanitized)).not.toContain('private');
+    expect(sanitized?.meta.page?.url).toBe('/');
   });
 });

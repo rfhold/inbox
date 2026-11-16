@@ -441,8 +441,8 @@ async fn two_users_cannot_cross_mail_authorization_or_command_results() {
     struct Handler;
     impl mcp::client::McpClientHandler for Handler {}
     for (service, own, foreign) in [
-        (a.clone(), am.id.clone(), bm.id.clone()),
-        (b.clone(), bm.id.clone(), am.id.clone()),
+        (a.clone(), am.address.clone(), bm.address.clone()),
+        (b.clone(), bm.address.clone(), am.address.clone()),
     ] {
         let stop = tokio_util::sync::CancellationToken::new();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

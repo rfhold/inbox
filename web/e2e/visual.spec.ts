@@ -9,7 +9,7 @@ for (const theme of ['light', 'dark'] as const) test(`${theme} mail layout has i
   await page.emulateMedia({colorScheme: theme, reducedMotion: 'reduce'});
   const subjects = ['Project handoff for Monday', 'Notes from the team', 'A quick follow-up', 'Welcome to the shared inbox'];
   const senders = ['alex', 'jordan', 'sam', 'taylor'];
-  const entries = Array.from({length: 32}, (_, index) => ({id: `synthetic-${index}`, mailboxId: 'synthetic-design', messageId: `synthetic-message-${index}`, folder: Folder.INBOX, fromAddress: `${senders[index % 4]}@inbox.test`, to: ['team@inbox.test'], subject: subjects[index % 4], preview: 'Here are the notes and next steps for our conversation.', isRead: index % 3 === 1, createdAt: new Date(Date.now() - index * 3600000).toISOString()}));
+  const entries = Array.from({length: 32}, (_, index) => ({id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, mailboxId: 'synthetic-design', messageId: `synthetic-message-${index}`, folder: Folder.INBOX, fromAddress: `${senders[index % 4]}@inbox.test`, to: ['team@inbox.test'], subject: subjects[index % 4], preview: 'Here are the notes and next steps for our conversation.', isRead: index % 3 === 1, createdAt: new Date(Date.now() - index * 3600000).toISOString()}));
   const body = 'Hi team,\n\nThe handoff is ready for Monday. I’ve collected the notes and next steps so we can pick up where we left off.\n\nPlease take a look when you have a moment, and reply here with any questions.\n\nThanks,\nAlex\n\nSynthetic preview content.';
   await page.route('**/config.json', route => route.fulfill({json: {faro_url: '', environment: 'test', version: 'test'}}));
   await page.route('**/inbox.v1.MailService/*', async route => {
@@ -22,7 +22,7 @@ for (const theme of ['light', 'dark'] as const) test(`${theme} mail layout has i
       const data = route.request().postDataBuffer()!;
       const request = fromBinary(GetMessageRequestSchema, data.subarray(5, 5 + data.readUInt32BE(1)));
       const entry = entries.find(item => item.id === request.entryId)!;
-      payload = toBinary(GetMessageResponseSchema, create(GetMessageResponseSchema, {message: {entry, textBody: request.entryId === 'synthetic-1' ? body.repeat(20) : body}}));
+      payload = toBinary(GetMessageResponseSchema, create(GetMessageResponseSchema, {message: {entry, textBody: request.entryId === '00000000-0000-4000-8000-000000000001' ? body.repeat(20) : body}}));
     } else return route.abort();
     await route.fulfill({body: grpcFrame(payload), contentType: 'application/grpc-web+proto'});
   });

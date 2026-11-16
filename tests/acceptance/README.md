@@ -361,7 +361,7 @@ After the coordinator authorizes execution, run from the repository root:
 INBOX_WAKE_RUN=1 \
 INBOX_WAKE_BINARY=/absolute/path/to/verified/opencode-2.3.0 \
 INBOX_WAKE_TEMP_ROOT=/absolute/path/to/approved/temp-directory \
-INBOX_WAKE_MAILBOX_ID=00000000-0000-4000-8000-000000000001 \
+INBOX_WAKE_MAILBOX_ADDRESS=synthetic@inbox.test \
 INBOX_WAKE_TIMEOUT=120 \
 node tests/acceptance/opencode_wake.mjs
 ```

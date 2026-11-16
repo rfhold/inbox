@@ -46,6 +46,10 @@ const jobs = {
   all: () => transaction<Job[]>('jobs', 'readonly', s => s.getAll()),
   save: (job: Job) => transaction('jobs', 'readwrite', s => s.put(job, job.id)),
 };
+const notifications = {
+  dismissed: async () => await transaction<string[] | undefined>('metadata', 'readonly', s => s.get('dismissed-notifications')) ?? [],
+  dismiss: (keys: string[]) => transaction('metadata', 'readwrite', s => s.put(keys.slice(-100), 'dismissed-notifications')),
+};
 async function commandKey(key: string) {
   commandTab ??= (() => {
     if (typeof sessionStorage === 'undefined' || !navigator.locks)
@@ -240,7 +244,7 @@ function newDraft(from: string): Draft {
   return {id: crypto.randomUUID(), key: crypto.randomUUID(), from, to: '', cc: '', subject: '', body: ''};
 }
 const close = () => {void opened?.then(database => database.close()).catch(() => {}); opened = undefined;};
-return {drafts, jobs, commands, confirmDraft, resumeToken, invalidateMail, clearMail, cached, newDraft, affectedMailKey, close};
+return {drafts, jobs, notifications, commands, confirmDraft, resumeToken, invalidateMail, clearMail, cached, newDraft, affectedMailKey, close};
 }
 export type MailChange = Pick<ChangeEvent, 'kind' | 'resumeToken' | 'mailboxId' | 'entryId' | 'submissionId'> & Partial<Pick<ChangeEvent, 'domainId'>>;
 interface CacheState { epoch: number; cursor: string; }

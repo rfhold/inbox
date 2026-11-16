@@ -3,11 +3,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/solid-query';
 import App from './App';
 import { Session, type Account, type SessionState } from './session';
 import { legacyLogoutKey, logoutBarrierKey } from './logout-barrier';
+import { Router, Route } from '@solidjs/router';
 
 function Workspace(props: {account: Account; logout: () => void}) {
   const queries = new QueryClient({defaultOptions: {queries: {retry: false, networkMode: 'always', staleTime: 15000}}});
   onCleanup(() => {void queries.cancelQueries(); queries.clear();});
-  return <QueryClientProvider client={queries}><App account={props.account} logout={props.logout} /></QueryClientProvider>;
+  return <QueryClientProvider client={queries}><Router root={() => <App account={props.account} logout={props.logout} />}><Route path="*all" component={() => null} /></Router></QueryClientProvider>;
 }
 export default function Auth() {
   const [state, setState] = createSignal<SessionState>({status: 'loading'});

@@ -134,7 +134,7 @@ async fn http_discovery_strict_inputs_and_absent_broker_fail_closed() {
             .await
             .is_err()
     );
-    let from = format!("waltr://mailboxes/{}", Uuid::new_v4());
+    let from = format!("waltr://mailboxes/{}@inbox.test", Uuid::new_v4());
     let args = json!({"from":from,"to":["synthetic@inbox.test"],"cc":[],"subject":"Synthetic","body":"Synthetic","idempotency_key":"stable"});
     let result = client
         .call_tool(
@@ -320,8 +320,8 @@ async fn http_resources_mutations_events_replay_and_cancel() {
         client.list_events(None, cancel()).await.unwrap().events[0].name,
         "mail.received"
     );
-    let from = format!("waltr://mailboxes/{}", mailboxes[0].id);
-    let inbox = format!("waltr://mailboxes/{}/inbox", mailboxes[1].id);
+    let from = format!("waltr://mailboxes/{}", mailboxes[0].address);
+    let inbox = format!("waltr://mailboxes/{}/inbox", mailboxes[1].address);
     let sender_inbox = format!("{from}/inbox");
     let sender_before =
         inbox_server::arrivals::load_watermark(&db, mailboxes[0].id.parse().unwrap())
@@ -579,7 +579,7 @@ async fn http_resources_mutations_events_replay_and_cancel() {
             .unwrap(),
     );
     assert_eq!(sent_entries["entries"].as_array().unwrap().len(), 1);
-    let wrong = message.replace(&mailboxes[1].id, &mailboxes[0].id);
+    let wrong = message.replace(&mailboxes[1].address, &mailboxes[0].address);
     assert!(client.read_resource(&wrong, cancel()).await.is_err());
     let other_actor = inbox_server::auth::Actor {
         user_id: Uuid::new_v4(),
@@ -640,7 +640,7 @@ async fn http_resources_mutations_events_replay_and_cancel() {
         .unwrap();
     assert!(foreign.recv().await.unwrap().is_err());
     foreign.shutdown().await;
-    let replied=client.call_tool(McpToolCall {name:"reply_to_message".into(),arguments:json!({"from":format!("waltr://mailboxes/{}",mailboxes[1].id),"source":message,"to":[mailboxes[0].address],"cc":[],"subject":"Re: Synthetic MCP","body":"Synthetic reply","idempotency_key":Uuid::new_v4().to_string()}),progress_token:None},cancel()).await.unwrap();
+    let replied=client.call_tool(McpToolCall {name:"reply_to_message".into(),arguments:json!({"from":format!("waltr://mailboxes/{}",mailboxes[1].address),"source":message,"to":[mailboxes[0].address],"cc":[],"subject":"Re: Synthetic MCP","body":"Synthetic reply","idempotency_key":Uuid::new_v4().to_string()}),progress_token:None},cancel()).await.unwrap();
     assert_eq!(replied.raw["structuredContent"]["outcome"], "accepted");
     let replied_view = tokio::time::timeout(Duration::from_secs(20), async {
         loop {

@@ -32,6 +32,9 @@ importers:
       '@opentelemetry/api':
         specifier: 1.9.0
         version: 1.9.0
+      '@solidjs/router':
+        specifier: ^1.0.3
+        version: 1.0.3(solid-js@1.9.19)
       '@tanstack/solid-query':
         specifier: ^5.90.0
         version: 5.107.1(solid-js@1.9.19)
@@ -613,6 +616,11 @@ packages:
     resolution: {integrity: sha512-ADb1Uz2MNM0sxVpAlMNdQG16Hw4sgW1aqVL7NeqBMpcZeiHb192d7W6shZdMQs33D+w9ihDYBBPsYqqc4MlD8w==}
     cpu: [x64]
     os: [win32]
+
+  '@solidjs/router@1.0.3':
+    resolution: {integrity: sha512-EULOxZNMGISNgQU+uXLtt6o4X5bIE+0HiPW0gGSOyl3HJmyClSDDHLGJ5JTHkbiyUSc6DttVvnVZYfK1a+70BA==}
+    peerDependencies:
+      solid-js: ^1.8.6
 
   '@tanstack/query-core@5.107.1':
     resolution: {integrity: sha512-PSyAik11oQBEVOiVy5hjZWHmoUqOXqK1WYy4v55mcxozEfKaQgpUMsgnXhWjuESzSht8JfzqMS1m6M/9CpNgvg==}
@@ -1551,6 +1559,10 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.68.3':
     optional: true
+
+  '@solidjs/router@1.0.3(solid-js@1.9.19)':
+    dependencies:
+      solid-js: 1.9.19
 
   '@tanstack/query-core@5.107.1': {}
 

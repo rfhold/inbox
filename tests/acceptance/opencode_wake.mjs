@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export const EXECUTABLE_SHA256 = '9f3147cae4ca323827d3ca39451b0d3431b2906e79a08e9b09d1eb34bb703f52';
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAILBOX = /^[a-z0-9._+-]+@[a-z0-9.-]+$/;
 const MAX = 2 * 1024 * 1024;
 const MESSAGE_LIMIT = 100;
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -182,7 +182,7 @@ export function wakeEvidence(messages, events, eventID, marker, context = {}) {
 export function safeBlocker(error) {
   const allowed = new Set([
     'Set INBOX_WAKE_RUN=1 for an explicitly authorized live run',
-    'Require absolute binary/temp root and synthetic mailbox UUID',
+    'Require absolute binary/temp root and synthetic mailbox email',
     'Timeout must be 90..150 seconds', 'Binary SHA256 mismatch',
     'Private runtime identity mismatch', 'Private runtime launch failed', 'Private runtime exited',
     'Event stream failed or closed', 'SSE unavailable', 'Invalid session response', 'Invalid prompt admission response',
@@ -237,9 +237,9 @@ export async function run(env = process.env) {
   if (env.INBOX_WAKE_RUN !== '1') throw new Error('Set INBOX_WAKE_RUN=1 for an explicitly authorized live run');
   const binary = env.INBOX_WAKE_BINARY;
   const tempRoot = env.INBOX_WAKE_TEMP_ROOT;
-  const mailboxID = env.INBOX_WAKE_MAILBOX_ID;
-  if (!binary || !path.isAbsolute(binary) || !tempRoot || !path.isAbsolute(tempRoot) || !UUID.test(mailboxID ?? '')) {
-    throw new Error('Require absolute binary/temp root and synthetic mailbox UUID');
+  const mailboxID = env.INBOX_WAKE_MAILBOX_ADDRESS;
+  if (!binary || !path.isAbsolute(binary) || !tempRoot || !path.isAbsolute(tempRoot) || !MAILBOX.test(mailboxID ?? '')) {
+    throw new Error('Require absolute binary/temp root and synthetic mailbox email');
   }
   const seconds = Number(env.INBOX_WAKE_TIMEOUT ?? 120);
   if (!Number.isInteger(seconds) || seconds < 90 || seconds > 150) throw new Error('Timeout must be 90..150 seconds');
@@ -348,7 +348,7 @@ export async function run(env = process.env) {
       const messages = await observe();
       return registrationReady(messages, events, armedMarker);
     }, deadline, controller.signal, 250);
-    emit('WATCH_REGISTERED', { sessionID, mailboxID, eventFile,
+    emit('WATCH_REGISTERED', { sessionID, eventFile,
       admissionProven: false });
     emit('READY_FOR_FIXTURE', fixtureReadyFields(sessionID, eventFile));
     const fixture = await waitFor(async () => {
