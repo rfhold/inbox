@@ -1,6 +1,6 @@
 [package]
 name = "inbox-server"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 [dependencies]
 mcp = { git = "https://git.holdenitdown.net/rfhold/waltr.git", rev = "d7a2527db2b0b85b2b382527f24d779bb522d8e9", default-features = false, features = ["oauth-authorization-server-postgres", "oauth-resource-owner-oidc-postgres"] }
