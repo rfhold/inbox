@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "inbox-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-nats",
  "axum",
@@ -1412,6 +1412,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "hmac",
+ "http-body",
  "jsonwebtoken 10.4.0",
  "mail-builder",
  "mail-parser",

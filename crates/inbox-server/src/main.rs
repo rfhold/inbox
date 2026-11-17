@@ -96,6 +96,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let config = serde_json::json!({"faro_url":value("INBOX_FARO_URL","https://faro.holdenitdown.net/collect"),"environment":value("INBOX_ENVIRONMENT","local"),"version":env!("CARGO_PKG_VERSION")});
     let web = value("INBOX_WEB_DIR", "web/dist");
     let mcp_stop = tokio_util::sync::CancellationToken::new();
+    let lifecycle = Arc::new(inbox_server::lifecycle::Lifecycle::default());
     let adapter = inbox_server::mcp::InboxMcp::new(service.clone(), mcp_stop.clone());
     let mcp = if let Some(hosted) = hosted {
         adapter
@@ -129,17 +130,69 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .fallback_service(
             ServeDir::new(&web).not_found_service(ServeFile::new(format!("{web}/index.html"))),
         )
-        .layer(middleware::from_fn(trace_request));
+        .layer(middleware::from_fn(trace_request))
+        .layer(middleware::from_fn_with_state(
+            lifecycle.clone(),
+            inbox_server::lifecycle::admit,
+        ));
     let listener = tokio::net::TcpListener::bind(value("INBOX_HTTP_ADDR", "0.0.0.0:8080")).await?;
     tracing::info!("server ready");
     {
         let (http_stop, http_stopped) = tokio::sync::oneshot::channel();
+        let listener = inbox_server::lifecycle::DrainListener::new(listener, lifecycle.clone());
         let server = axum::serve(listener, app).with_graceful_shutdown(async {
             let _ = http_stopped.await;
         });
         let serving = std::future::IntoFuture::into_future(server);
         tokio::pin!(serving);
-        tokio::select! {result=&mut serving=>{mcp_stop.cancel();result?;},_=shutdown()=>{mcp_stop.cancel();let _=http_stop.send(());let _=tokio::time::timeout(Duration::from_secs(15),&mut serving).await;}}
+        tokio::select! {
+            result = &mut serving => { result?; },
+            _ = shutdown() => {
+                let deadlines = inbox_server::lifecycle::Deadlines::new(tokio::time::Instant::now());
+                pipeline.begin_drain();
+                tracing::info!("withdrawing readiness");
+                tokio::select! {
+                    result = &mut serving => {
+                        result?;
+                        return Err("HTTP listener stopped during withdrawal".into());
+                    },
+                    _ = tokio::time::sleep_until(deadlines.withdraw) => {},
+                }
+                lifecycle.close_admission();
+                smtp.begin_drain();
+                mcp_stop.cancel();
+                pipeline.stop_watches();
+                let _ = http_stop.send(());
+                tracing::info!("draining admitted HTTP and SMTP");
+                let (http, _) = tokio::join!(
+                    tokio::time::timeout_at(deadlines.admissions, &mut serving),
+                    smtp.wait_until(deadlines.admissions),
+                );
+                if http.is_err() {
+                    tracing::warn!("HTTP admission drain deadline reached; outcomes may be uncertain");
+                }
+                lifecycle.force_close();
+                smtp.force_close();
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    match http {
+                        Ok(result) => result?,
+                        Err(_) => (&mut serving).await?,
+                    }
+                    lifecycle.wait_closed().await;
+                    Ok::<(), std::io::Error>(())
+                }).await??;
+                tracing::info!("draining workers");
+                let worker_deadline = deadlines.workers.min(tokio::time::Instant::now() + inbox_server::lifecycle::WORKERS);
+                pipeline.shutdown_until(worker_deadline).await;
+                drop(smtp);
+                let closure_deadline = deadlines.closure.min(tokio::time::Instant::now() + inbox_server::lifecycle::CLOSURE);
+                let _ = tokio::join!(
+                    tokio::time::timeout_at(closure_deadline, db.close()),
+                    tokio::time::timeout_at(closure_deadline, tokio::task::spawn_blocking(move || drop(telemetry))),
+                );
+                return Ok(());
+            }
+        }
     }
     pipeline.shutdown().await;
     drop(smtp);
@@ -196,6 +249,7 @@ async fn ready(State(s): State<MailService>) -> axum::http::StatusCode {
             .list_page("raw/".into(), None, None, None, Some(1))
             .await
             .is_ok_and(|(_, status)| status == 200)
+        && !pipeline.is_draining()
     {
         axum::http::StatusCode::OK
     } else {

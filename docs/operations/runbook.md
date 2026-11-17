@@ -32,6 +32,14 @@ For a normal stop that preserves volumes:
 docker compose stop
 ```
 
+Compose gives the app 270 seconds of stop grace, matching the hosted pod budget.
+Do not shorten it for a normal stop.
+The app withdraws readiness for ten seconds, drains admitted HTTP and SMTP DATA
+until the shared admission deadline, then stops worker pulls and closes stores.
+Keep PostgreSQL, Garage, and NATS available until the app exits.
+Active streams disconnect; resume/reset and same-key retries handle uncertain outcomes.
+Forced termination does not prove rejection or guarantee lossless SMTP acknowledgement.
+
 ## Browser session and offline access
 
 The [client contract](../architecture/spec/client.md#offline-reload-limits) defines mode-specific offline access.

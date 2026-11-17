@@ -179,14 +179,21 @@ const deployment = new k8s.apps.v1.Deployment("inbox", {
     annotations: { "secret.reloader.stakater.com/reload": ["inbox-app", "inbox-oauth-wrapping-keys", "inbox-postgres-ca", ...(credentialsSecret ? ["inbox-nats-credentials"] : [])].join(",") },
   },
   spec: {
-    replicas: 1, strategy: { type: "Recreate" }, selector: { matchLabels: workloadLabels },
+    replicas: 2, minReadySeconds: 10,
+    strategy: { type: "RollingUpdate", rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } },
+    selector: { matchLabels: workloadLabels },
     template: {
       metadata: {
         labels: workloadLabels,
         annotations: { "inbox.holdenitdown.net/wrapping-key-checksum": keyring.apply((value) => createHash("sha256").update(value).digest("hex")) },
       },
       spec: {
-        automountServiceAccountToken: false, terminationGracePeriodSeconds: 30,
+        automountServiceAccountToken: false, terminationGracePeriodSeconds: 270,
+        affinity: { podAntiAffinity: { requiredDuringSchedulingIgnoredDuringExecution: [{
+          labelSelector: { matchLabels: workloadLabels },
+          namespaces: [namespace.metadata.name],
+          topologyKey: "kubernetes.io/hostname",
+        }] } },
         securityContext: { runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001, seccompProfile: { type: "RuntimeDefault" } },
         containers: [{
           name: "inbox", image, imagePullPolicy: "IfNotPresent",
@@ -214,6 +221,10 @@ const deployment = new k8s.apps.v1.Deployment("inbox", {
     },
   },
 }, { dependsOn: [appSecret, wrappingSecret, database, pgCaSecret, ...(credentialsSecret ? [credentialsSecret] : [])] });
+new k8s.policy.v1.PodDisruptionBudget("inbox", {
+  metadata: { name: "inbox", namespace: namespace.metadata.name, labels },
+  spec: { minAvailable: 1, selector: { matchLabels: workloadLabels } },
+});
 new k8s.networking.v1.NetworkPolicy("inbox-network", {
   metadata: { name: "inbox", namespace: namespace.metadata.name, labels },
   spec: {

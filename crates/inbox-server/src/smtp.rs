@@ -4,7 +4,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     net::{IpAddr, TcpListener, TcpStream},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -19,6 +19,9 @@ struct Receiver {
     recipients: Vec<(Uuid, String)>,
     oversize: bool,
     rejected_recipient: bool,
+    drain: Arc<Mutex<bool>>,
+    in_data: Arc<AtomicBool>,
+    force: tokio_util::sync::CancellationToken,
 }
 fn reject_data(code: u16, message: &str) -> Response {
     let mut response = Response::custom(code, message.into());
@@ -70,6 +73,11 @@ impl Handler for Receiver {
         }
     }
     fn data_start(&mut self, _: &str, _: &str, _: bool, _: &[String]) -> Response {
+        let drain = self.drain.lock().expect("SMTP drain lock");
+        if *drain {
+            return reject_data(421, "Server draining; retry later");
+        }
+        self.in_data.store(true, Ordering::Relaxed);
         self.raw.clear();
         self.oversize = false;
         response::OK
@@ -83,6 +91,13 @@ impl Handler for Receiver {
         Ok(())
     }
     fn data_end(&mut self) -> Response {
+        let result = self.finish_data();
+        self.in_data.store(false, Ordering::Relaxed);
+        result
+    }
+}
+impl Receiver {
+    fn finish_data(&mut self) -> Response {
         if self.rejected_recipient {
             return reject_data(554, "Recipient set rejected");
         }
@@ -93,18 +108,45 @@ impl Handler for Receiver {
         let recipients = std::mem::take(&mut self.recipients);
         completion(
             self.runtime
-                .block_on(self.service.accept_smtp(raw, recipients))
+                .block_on(async {
+                    tokio::select! {
+                        _ = self.force.cancelled() => Err(tonic::Status::unavailable("server draining")),
+                        result = self.service.accept_smtp(raw, recipients) => result,
+                    }
+                })
                 .map(|_| ()),
         )
     }
 }
 pub struct SmtpGuard {
-    stop: Arc<AtomicBool>,
+    drain: Arc<Mutex<bool>>,
+    force: tokio_util::sync::CancellationToken,
+    active: Arc<AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+impl SmtpGuard {
+    pub fn begin_drain(&self) {
+        *self.drain.lock().expect("SMTP drain lock") = true;
+    }
+    pub fn force_close(&self) {
+        self.force.cancel();
+    }
+    pub async fn wait_until(&self, deadline: tokio::time::Instant) {
+        while self.active.load(Ordering::Relaxed) > 0 {
+            if tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_millis(20)))
+                .await
+                .is_err()
+            {
+                self.force_close();
+                break;
+            }
+        }
+    }
 }
 impl Drop for SmtpGuard {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.begin_drain();
+        self.force_close();
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -113,12 +155,16 @@ impl Drop for SmtpGuard {
 pub fn start(addr: &str, service: MailService) -> io::Result<SmtpGuard> {
     let listener = TcpListener::bind(addr)?;
     listener.set_nonblocking(true)?;
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopping = stop.clone();
+    let drain = Arc::new(Mutex::new(false));
+    let stopping = drain.clone();
+    let force = tokio_util::sync::CancellationToken::new();
+    let forcing = force.clone();
+    let active = Arc::new(AtomicUsize::new(0));
+    let connections = active.clone();
     let runtime = Handle::current();
     let thread = std::thread::spawn(move || {
-        let active = Arc::new(AtomicUsize::new(0));
-        while !stopping.load(Ordering::Relaxed) {
+        let active = connections;
+        while !*stopping.lock().expect("SMTP drain lock") {
             match listener.accept() {
                 Ok((mut stream, peer)) => {
                     if active.load(Ordering::Relaxed) >= 16 {
@@ -130,8 +176,9 @@ pub fn start(addr: &str, service: MailService) -> io::Result<SmtpGuard> {
                     let service = service.clone();
                     let runtime = runtime.clone();
                     let stopping = stopping.clone();
+                    let forcing = forcing.clone();
                     std::thread::spawn(move || {
-                        let _ = connection(stream, peer.ip(), service, runtime, stopping);
+                        let _ = connection(stream, peer.ip(), service, runtime, stopping, forcing);
                         active.fetch_sub(1, Ordering::Relaxed);
                     });
                 }
@@ -141,13 +188,11 @@ pub fn start(addr: &str, service: MailService) -> io::Result<SmtpGuard> {
                 Err(_) => break,
             }
         }
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while active.load(Ordering::Relaxed) > 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
     });
     Ok(SmtpGuard {
-        stop,
+        drain,
+        force,
+        active,
         thread: Some(thread),
     })
 }
@@ -156,11 +201,13 @@ fn connection(
     peer: IpAddr,
     service: MailService,
     runtime: Handle,
-    stop: Arc<AtomicBool>,
+    drain: Arc<Mutex<bool>>,
+    force: tokio_util::sync::CancellationToken,
 ) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(1)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
+    let in_data = Arc::new(AtomicBool::new(false));
     let mut session = SessionBuilder::new(service.domain.clone()).build(
         peer,
         Receiver {
@@ -170,13 +217,20 @@ fn connection(
             recipients: Vec::new(),
             oversize: false,
             rejected_recipient: false,
+            drain: drain.clone(),
+            in_data: in_data.clone(),
+            force: force.clone(),
         },
     );
     session.greeting().write_to(&mut stream)?;
     let mut line = Vec::new();
     let mut idle = Instant::now();
     let started = Instant::now();
-    while !stop.load(Ordering::Relaxed) && started.elapsed() < Duration::from_secs(300) {
+    while !force.is_cancelled() && started.elapsed() < Duration::from_secs(300) {
+        if *drain.lock().expect("SMTP drain lock") && !in_data.load(Ordering::Relaxed) {
+            stream.write_all(b"421 Server draining; retry later\r\n")?;
+            break;
+        }
         let available = match reader.fill_buf() {
             Ok(b) => b,
             Err(e)
@@ -312,6 +366,9 @@ mod tests {
                         recipients: Vec::new(),
                         oversize: false,
                         rejected_recipient: false,
+                        drain: Arc::new(Mutex::new(false)),
+                        in_data: Arc::new(AtomicBool::new(false)),
+                        force: tokio_util::sync::CancellationToken::new(),
                     },
                     policy_rejected,
                 };
@@ -396,9 +453,17 @@ mod tests {
                 recipients: vec![(Uuid::new_v4(), "a@inbox.test".into())],
                 oversize: false,
                 rejected_recipient: true,
+                drain: Arc::new(Mutex::new(false)),
+                in_data: Arc::new(AtomicBool::new(false)),
+                force: tokio_util::sync::CancellationToken::new(),
             };
             assert_eq!(receiver.data_end().code, 554);
             receiver.rejected_recipient = false;
+            *receiver.drain.lock().unwrap() = true;
+            let reply = receiver.data_start("", "", false, &[]);
+            assert_eq!(reply.code, 421);
+            assert_eq!(reply.action, Action::Close);
+            assert!(!receiver.in_data.load(Ordering::Relaxed));
             receiver.data_end().code
         })
         .await

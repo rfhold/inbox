@@ -24,6 +24,11 @@ Mailbox email paths and entry IDs must not enter telemetry or error context.
 ## Browser transport and display
 
 Rust serves production assets and RPC endpoints from one origin.
+Rolling deployments can briefly serve different bundled asset versions.
+An HTML, asset, or service-worker request can reach a different release and fail;
+this uncommon web disruption is accepted, without cross-release asset retention.
+Reconnect or reload after rollout can recover; device-local drafts remain separate.
+Active streams can disconnect during pod termination and use their existing resume/reset behavior.
 The SPA uses generated TypeScript protobuf bindings with `createGrpcWebTransport`.
 The [change stream contract](changes.md) defines live updates, cursor recovery, and persistent cache invalidation.
 Plain-text views never interpret message content as HTML.

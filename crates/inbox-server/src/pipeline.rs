@@ -82,10 +82,14 @@ pub struct Pipeline {
     js: jetstream::Context,
     objects: jetstream::object_store::ObjectStore,
     stop: watch::Sender<bool>,
+    watch_stop: tokio_util::sync::CancellationToken,
+    publisher_stop: watch::Sender<bool>,
+    draining: AtomicBool,
     running: AtomicBool,
     worker_healthy: AtomicBool,
     ingress: Semaphore,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    publisher_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 impl Pipeline {
     pub async fn connect(url: &str) -> Result<Arc<Self>, Status> {
@@ -207,16 +211,21 @@ impl Pipeline {
         }
         let objects = js.get_object_store(staging).await.map_err(storage)?;
         let (stop, _) = watch::channel(false);
+        let (publisher_stop, _) = watch::channel(false);
         Ok(Arc::new(Self {
             config,
             client,
             js,
             objects,
             stop,
+            watch_stop: tokio_util::sync::CancellationToken::new(),
+            publisher_stop,
+            draining: AtomicBool::new(false),
             running: AtomicBool::new(false),
             worker_healthy: AtomicBool::new(false),
             ingress: Semaphore::new(16),
             tasks: Mutex::new(Vec::new()),
+            publisher_task: Mutex::new(None),
         }))
     }
     pub fn namespace(&self) -> &str {
@@ -229,7 +238,7 @@ impl Pipeline {
             && !*self.stop.borrow()
     }
     pub async fn resources_ready(&self) -> bool {
-        if !self.ready() {
+        if self.draining.load(Ordering::Relaxed) || !self.ready() {
             return false;
         }
         for (suffix, subjects, bytes, retention, discard, age, message_size) in [
@@ -550,6 +559,7 @@ impl Pipeline {
         let p = self.clone();
         let publisher_service = service.clone();
         let publisher = tokio::spawn(async move { p.publisher(publisher_service).await });
+        *self.publisher_task.lock().expect("publisher task lock") = Some(publisher);
         let p = self.clone();
         let worker = tokio::spawn(async move {
             let mut stop = p.stop.subscribe();
@@ -569,7 +579,7 @@ impl Pipeline {
                     tokio::select! {_=stop.changed()=>break,_=tokio::time::sleep(Duration::from_secs(1))=>{}}
                     continue;
                 };
-                let message = tokio::select! {_=stop.changed()=>break,m=batch.next()=>m};
+                let message = tokio::select! {biased;_=stop.changed()=>break,m=batch.next()=>m};
                 let message = match message {
                     Some(Ok(message)) => {
                         p.worker_healthy.store(true, Ordering::Relaxed);
@@ -646,10 +656,7 @@ impl Pipeline {
             }
             p.running.store(false, Ordering::Relaxed);
         });
-        self.tasks
-            .lock()
-            .expect("worker task lock")
-            .extend([publisher, worker]);
+        self.tasks.lock().expect("worker task lock").push(worker);
         // Wait until a worker actually exists before ingress becomes ready.
         for _ in 0..100 {
             if self.ready() {
@@ -841,7 +848,7 @@ impl Pipeline {
         .await
     }
     async fn publisher(&self, s: MailService) {
-        let mut stop = self.stop.subscribe();
+        let mut stop = self.publisher_stop.subscribe();
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
             tokio::select! {_=stop.changed()=>break,_=tick.tick()=>{}}
@@ -924,22 +931,49 @@ impl Pipeline {
         }
         tx.commit().await.map_err(storage)
     }
+    pub fn begin_drain(&self) {
+        self.draining.store(true, Ordering::Relaxed);
+    }
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::Relaxed)
+    }
+    pub fn stop_watches(&self) {
+        self.watch_stop.cancel();
+    }
     pub async fn shutdown(&self) {
+        self.shutdown_until(tokio::time::Instant::now() + Duration::from_secs(120))
+            .await;
+    }
+    pub async fn shutdown_until(&self, deadline: tokio::time::Instant) {
+        self.begin_drain();
+        self.stop_watches();
         self.stop.send_replace(true);
         self.running.store(false, Ordering::Relaxed);
         let tasks = std::mem::take(&mut *self.tasks.lock().expect("worker task lock"));
         for mut task in tasks {
-            if tokio::time::timeout(Duration::from_secs(3), &mut task)
-                .await
-                .is_err()
-            {
+            if tokio::time::timeout_at(deadline, &mut task).await.is_err() {
                 task.abort();
                 let _ = task.await;
             }
         }
-        let _ = tokio::time::timeout(Duration::from_secs(3), self.client.flush()).await;
+        self.publisher_stop.send_replace(true);
+        let publisher = self
+            .publisher_task
+            .lock()
+            .expect("publisher task lock")
+            .take();
+        if let Some(mut task) = publisher
+            && tokio::time::timeout_at(deadline, &mut task).await.is_err()
+        {
+            task.abort();
+            let _ = task.await;
+        }
+        let _ = tokio::time::timeout_at(deadline, self.client.flush()).await;
     }
     pub async fn watch(&self, resume: String) -> Result<ChangeStream, Status> {
+        if self.watch_stop.is_cancelled() {
+            return Err(Status::unavailable("server draining"));
+        }
         let mut stream = self
             .js
             .get_stream(self.config.resource("CHANGES"))
@@ -971,7 +1005,7 @@ impl Pipeline {
         let lagged_task = lagged.clone();
         let reset_task = reset_seq.clone();
         let final_generation = generation.clone();
-        let mut stop = self.stop.subscribe();
+        let stop = self.watch_stop.clone();
         tokio::spawn(async move {
             if reset {
                 let _ = sender.send(Ok(event(1, &generation, seq))).await;
@@ -979,13 +1013,13 @@ impl Pipeline {
                 let _ = sender.send(Ok(event(5, &generation, seq))).await;
             }
             'watch: loop {
-                let batch = tokio::select! {_=stop.changed()=>break,_=sender.closed()=>break,b=consumer.batch().max_messages(16).expires(Duration::from_secs(15)).messages()=>b};
+                let batch = tokio::select! {_=stop.cancelled()=>break,_=sender.closed()=>break,b=consumer.batch().max_messages(16).expires(Duration::from_secs(15)).messages()=>b};
                 let Ok(mut batch) = batch else {
                     let _ = sender.try_send(Err(Status::unavailable("change stream unavailable")));
                     break;
                 };
                 loop {
-                    let next = tokio::select! {_=stop.changed()=>break 'watch,_=sender.closed()=>break 'watch,m=batch.next()=>m};
+                    let next = tokio::select! {_=stop.cancelled()=>break 'watch,_=sender.closed()=>break 'watch,m=batch.next()=>m};
                     let Some(Ok(message)) = next else { break };
                     let Ok(metadata) = message.info() else {
                         break 'watch;
@@ -1008,8 +1042,10 @@ impl Pipeline {
                         break 'watch;
                     };
                     change.resume_token = token(&generation, received);
-                    if tokio::time::timeout(Duration::from_secs(15), sender.send(Ok(change)))
-                        .await
+                    if tokio::select! {
+                        _ = stop.cancelled() => break 'watch,
+                        result = tokio::time::timeout(Duration::from_secs(15), sender.send(Ok(change))) => result
+                    }
                         .is_err()
                     {
                         reset_task.store(received, Ordering::Relaxed);
@@ -1104,6 +1140,47 @@ fn event(kind: i32, generation: &str, seq: u64) -> ChangeEvent {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    #[ignore = "requires explicitly isolated INBOX_TEST_NATS_URL"]
+    async fn shutdown_keeps_publisher_until_workers_finish_and_bounds_all_tasks() {
+        use super::*;
+        let url = std::env::var("INBOX_TEST_NATS_URL").unwrap();
+        for forced in [false, true] {
+            let pipeline = Pipeline::connect(&url).await.unwrap();
+            let completed = Arc::new(AtomicBool::new(false));
+            let done = completed.clone();
+            let p = pipeline.clone();
+            pipeline
+                .tasks
+                .lock()
+                .unwrap()
+                .push(tokio::spawn(async move {
+                    if forced {
+                        std::future::pending::<()>().await;
+                    } else {
+                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        assert!(!*p.publisher_stop.borrow());
+                        done.store(true, Ordering::Relaxed);
+                    }
+                }));
+            let mut stop = pipeline.publisher_stop.subscribe();
+            let publisher = tokio::spawn(async move {
+                stop.changed().await.unwrap();
+                if forced {
+                    std::future::pending::<()>().await;
+                }
+            });
+            *pipeline.publisher_task.lock().unwrap() = Some(publisher);
+            let started = tokio::time::Instant::now();
+            pipeline
+                .shutdown_until(started + Duration::from_millis(200))
+                .await;
+            assert_eq!(completed.load(Ordering::Relaxed), !forced);
+            assert!(started.elapsed() < Duration::from_millis(300));
+            assert!(pipeline.tasks.lock().unwrap().is_empty());
+            assert!(pipeline.publisher_task.lock().unwrap().is_none());
+        }
+    }
     use super::*;
     #[test]
     fn reused_stream_cannot_transform_republish_expire_or_weaken_confirmation() {

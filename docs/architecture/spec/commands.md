@@ -62,6 +62,32 @@ Transport redelivery has no delivery-count limit.
 Application recipient delivery remains bounded at eight attempts with recoverable leases.
 Unlimited transport redelivery does not imply unlimited application delivery attempts.
 
+## Replica and shutdown boundary
+
+Replicas share PostgreSQL, S3, and the environment's JetStream resources.
+The durable mutation consumer remains globally serialized; extra app replicas do not increase its concurrency.
+No sticky routing or process-local authoritative mail state is required.
+
+On termination, readiness fails immediately while liveness stays independent.
+The process continues admission during a 10-second endpoint-withdrawal window.
+It then closes new HTTP and SMTP admission, cancels change and MCP streams, and
+allows admitted HTTP calls and accepted SMTP DATA to finish concurrently.
+Idle SMTP sessions receive a temporary failure; SMTP `250` still requires durable confirmation.
+The admission deadline is 110 seconds from termination.
+Workers then stop new pulls and finish current work with the outbox publisher
+available for up to 120 seconds, no later than 230 seconds from termination.
+Database and telemetry closure share a ten-second deadline, no later than 240 seconds from termination.
+Kubernetes and Compose allow 270 seconds of termination grace.
+Deadlines are absolute, not renewed for each connection or task.
+
+Deadline expiry can cancel a response or interrupt processing.
+Force cancellation covers response bodies and connection I/O, not only response headers.
+Before worker shutdown, the server waits up to five seconds for expired HTTP connection tasks to exit.
+This wait consumes the total worker deadline; failure returns a shutdown error instead of advancing the graceful worker phase.
+Durable commands, journals, leases, and outbox replay retain their existing recovery semantics.
+An interrupted caller must treat its outcome as uncertain and retry with the same application key.
+This is bounded graceful drain, not a lossless shutdown or a zero-disconnection guarantee.
+
 ## Large payloads and capacity
 
 Large command payloads use chunked JetStream object-store staging.

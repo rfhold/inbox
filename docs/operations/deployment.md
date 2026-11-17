@@ -78,6 +78,39 @@ The environment input and `inbox:natsCredentials` are mutually exclusive.
 Do not pass credential contents through command arguments, task Results, or shared workspaces.
 Pulumi child processes can inherit this environment value; process-environment inspection remains privileged.
 
+## Application availability and rollout
+
+Both stacks declare two app replicas with `RollingUpdate`, zero unavailable
+replicas, one surge replica, and ten seconds of continuous readiness before availability.
+Required hostname anti-affinity uses the workload labels and the environment namespace,
+including old and new ReplicaSets. A surge therefore needs a third eligible node.
+The PodDisruptionBudget preserves one available app replica during voluntary eviction;
+it does not protect against node failure or override Deployment rollout behavior.
+Verify actual pod placement and readiness in preview before promoting the image.
+
+Each process shares a PostgreSQL pool capped at 20 connections across mail and auth.
+Do not budget only for three nonterminating pods: a normal rollout can retain two
+terminating processes alongside two replacements, up to 80 app connections.
+Reserve capacity for CNPG and other clients, and do not overlap rollouts while old
+processes still hold connections. Verify actual `max_connections`, reserved slots,
+current usage, and memory headroom before rollout; this guide does not change PostgreSQL settings.
+CNPG remains a single instance, so this is application availability, not end-to-end dependency HA.
+Shared NATS quorum, S3 availability, database availability, and compatible schema remain prerequisites.
+
+The pod termination grace is 270 seconds.
+The [command contract](../architecture/spec/commands.md#replica-and-shutdown-boundary)
+defines readiness withdrawal and bounded HTTP, SMTP, worker, and closure deadlines.
+Health remains independent of dependency and drain readiness.
+Active streams reconnect with their existing cursors; continuous connections are not promised.
+Future schema changes must remain readable and writable by both rolling versions,
+using expand/contract changes and an explicit rollback boundary; migration locking alone is insufficient.
+
+Mixed-version bundled web assets and service-worker requests can fail during rollout.
+This uncommon web disruption is accepted; no shared asset archive, retention policy,
+service-worker migration, compatibility release, or blue/green deployment is provided.
+Verify the final image digest, two ready/available replicas on different nodes,
+and public readiness after each deployment. A successful pipeline alone is insufficient.
+
 ## Identity-provider constraint
 
 Native API token admission relies on Authentik `2025.10.2` and its `IDToken.to_access_token()` behavior.

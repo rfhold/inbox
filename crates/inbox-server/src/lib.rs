@@ -4,6 +4,7 @@ pub mod pb {
 pub mod arrivals;
 pub mod auth;
 pub mod domains;
+pub mod lifecycle;
 pub mod mcp;
 pub mod mutation;
 pub mod nats_config;

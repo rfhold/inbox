@@ -21,6 +21,7 @@ These commands follow workspace manifests; a command entry does not assert test 
 | `pnpm --dir web e2e:integration` | Browser tests against the integration preview. | Production web assets, Playwright browsers, and isolated dependencies as each test requires. |
 | `pnpm --dir web exec playwright test --config playwright.ux.config.ts` | Email routes, history, drafts, offline deep links, and dismissible notification fixtures. | Installed dependencies and Playwright browser; starts a local production web preview with mocked mail RPCs. |
 | `bun run --cwd infra/pulumi build` | Pulumi TypeScript check without an apply. | Installed infrastructure dependencies. |
+| `INBOX_TEST_DISPOSABLE_HA=1 tests/acceptance/.venv/bin/python tests/acceptance/ha_local.py` | Opt-in two-process replica, same-key, stream, and SMTP drain checks. | Docker, built `target/debug/inbox-server`, acceptance Python dependencies; creates and removes only unique task-owned containers, using synthetic data and loopback telemetry. |
 
 Check that test files and Playwright configuration exist before test execution.
 Report absent coverage or configuration as a gap, not a pass.
@@ -30,6 +31,15 @@ Fault tests require exclusive stack access and explicit execution authority.
 Observable restart tests do not replace deterministic commit-to-publication, pending-admission, bootstrap, or slow-consumer evidence.
 
 ## Required contract scenarios
+
+Application HA validation is local and opt-in, never a CI stage.
+Use two real app processes against one disposable PostgreSQL/NATS/S3 stack.
+Exercise concurrent identical request keys through different replicas and verify one effect,
+cross-replica reads/cursors, stream cancellation and resume, and admitted SMTP DATA during SIGTERM.
+Check readiness withdrawal, rejected new admission, current worker completion, and forced deadlines.
+Run authenticated session/OAuth/revocation cases separately; no-auth tests do not prove them.
+Do not use personal mail, production dependencies, or shared streams for fault tests.
+Record forced-deadline uncertainty and accepted mixed-version web disruption as limits, not passes.
 
 | Area | Evidence required |
 | --- | --- |
