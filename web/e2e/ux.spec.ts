@@ -61,6 +61,28 @@ test('drafts survive URL navigation and reopen after reload', async ({page}) => 
   await expect(page.locator('.composer')).toHaveCount(0);
 });
 
+test('the mailbox selector follows the URL after the directory changes', async ({page}) => {
+  await page.goto('/mail/two@inbox.test/inbox');
+  const selector = page.getByLabel('Mailbox', {exact: true});
+  await expect(selector).toHaveValue('box-two');
+  await page.route('**/inbox.v1.MailService/ListMailboxes', route => route.fulfill({
+    contentType: 'application/grpc-web+proto',
+    body: grpcFrame(toBinary(ListMailboxesResponseSchema, create(ListMailboxesResponseSchema, {
+      mailboxes: ['new', 'one', 'two'].map(value => ({...domainFields, id: `box-${value}`, name: value, localPart: value, address: `${value}@inbox.test`})),
+    }))),
+  }));
+  await page.getByRole('button', {name: 'Refresh', exact: true}).click();
+  await expect(selector.locator('option')).toHaveCount(3);
+  await expect(page).toHaveURL('/mail/two@inbox.test/inbox');
+  await expect(selector).toHaveValue('box-two');
+  await selector.selectOption('box-one');
+  await expect(page).toHaveURL('/mail/one@inbox.test/inbox');
+  await page.goBack();
+  await expect(selector).toHaveValue('box-two');
+  await page.reload();
+  await expect(selector).toHaveValue('box-two');
+});
+
 test('the cached shell supports mailbox and domains deep links offline', async ({page, context}) => {
   await page.goto('/mail/two@inbox.test/inbox');
   await expect(page.locator('.message-row')).toHaveCount(1);
@@ -77,6 +99,7 @@ test('the cached shell supports mailbox and domains deep links offline', async (
 test('unknown email and UUID mailbox routes never select a different mailbox', async ({page}) => {
   await page.goto('/mail/unknown@inbox.test/inbox');
   await expect(page.getByRole('alert')).toContainText('Mailbox');
+  await expect(page.getByLabel('Mailbox', {exact: true})).toHaveValue('');
   await page.goto(`/mail/${entry}/inbox`);
   await expect(page.getByRole('heading', {name: 'Page not found', exact: true})).toBeVisible();
 });

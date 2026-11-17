@@ -223,7 +223,7 @@ export default function App(props: {account: Account; logout: () => void}) {
     <div class="workspace" classList={{'show-detail': pane() === 'detail'}}>
       <aside class="sidebar" aria-label="Mail navigation">
         <div class="account"><div class="section-head"><label for="mailbox-selector">Mailbox</label><button class="icon-button" aria-label="Create mailbox" aria-expanded={creating()} onClick={() => setCreating(!creating())}><Icon name="plus" /></button></div>
-          <select id="mailbox-selector" value={box()} title={activeBox()?.address} disabled={busy()} onChange={e => void selectBox(e.currentTarget.value)}><Show when={!allBoxes().length}><option value="">Select a mailbox</option></Show><For each={allBoxes()}>{mailbox => <option value={mailbox.id} data-address={mailbox.address}>{mailbox.name || mailbox.localPart} · {mailbox.address}</option>}</For></select>
+          <select id="mailbox-selector" value={box()} title={activeBox()?.address} disabled={busy()} onChange={e => void selectBox(e.currentTarget.value)}><Show when={!box()}><option value="" selected>Select a mailbox</option></Show><For each={allBoxes()}>{mailbox => <option value={mailbox.id} selected={mailbox.id === box()} data-address={mailbox.address}>{mailbox.name || mailbox.localPart} · {mailbox.address}</option>}</For></select>
           <Show when={boxes.hasNextPage}><button class="text-button" disabled={boxes.isFetchingNextPage} onClick={() => void boxes.fetchNextPage()}>More mailboxes</button></Show>
         </div>
         <button class="primary compose" onClick={() => void compose()} disabled={!box() || busy()}><Icon name="compose" />Compose</button>
